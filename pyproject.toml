@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geomodeltools"
+version = "0.1.0"
+description = "Utilities for 3D geological modeling with GeoPandas and DEM workflows."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "A. M. S. Team" }
+]
+license = "MIT"
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "geopandas>=0.14",
+  "shapely>=2.0",
+  "rasterio>=1.3"
+]
+
+[project.optional-dependencies]
+viz = ["pyvista>=0.43"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
