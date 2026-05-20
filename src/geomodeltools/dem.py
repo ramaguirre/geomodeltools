@@ -19,6 +19,19 @@ from shapely.geometry import (
 
 
 def _first_xyz(geom):
+    """
+    Extract the first (x, y, z) coordinate from a geometry.
+
+    Parameters
+    ----------
+    geom : shapely.geometry.base.BaseGeometry
+        Input geometry (Point, LineString, Polygon, etc.).
+
+    Returns
+    -------
+    tuple
+        (x, y, z) coordinates as floats. z is np.nan if not present.
+    """
     if geom is None or geom.is_empty:
         return np.nan, np.nan, np.nan
 
@@ -44,19 +57,82 @@ def _first_xyz(geom):
 
 
 def _bounds_to_wgs84(gdf, margin=0.0):
+    """
+    Get WGS84 bounding box for a GeoDataFrame, with optional margin.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        Input GeoDataFrame.
+    margin : float, optional
+        Margin (in degrees) to expand the bounds.
+
+    Returns
+    -------
+    list
+        [west, south, east, north] in WGS84.
+    """
     gdf_wgs84 = gdf.to_crs(epsg=4326) if gdf.crs != "EPSG:4326" else gdf
     west, south, east, north = gdf_wgs84.total_bounds.tolist()
     margin = float(margin)
     return [west - margin, south - margin, east + margin, north + margin]
 
 
-def _download_opentopography_dem(
+def download_opentopography_dem(
     bounds_wgs84,
     out_tiff_path,
-    demtype="COP30",
+    demtype="AW3D30",
     api_key=None,
     timeout=180,
 ):
+    """
+    Download a DEM from OpenTopography for the given bounds.
+
+    Parameters
+    ----------
+    bounds_wgs84 : list
+        [west, south, east, north] in WGS84.
+    out_tiff_path : str or Path
+        Output path for the DEM GeoTIFF.
+    demtype : str, optional
+        DEM type (default "COP30").
+    api_key : str, optional
+        OpenTopography API key.
+    timeout : int, optional
+        Request timeout in seconds.
+
+    Returns
+    -------
+    str
+        Path to the downloaded DEM file.
+
+    Raises
+    ------
+    ValueError
+        If API key is missing.
+    RuntimeError
+        If the request fails.
+    
+    Notes
+    -----
+    Available DEM types:
+
+    - SRTMGL3      : SRTM GL3 90m
+    - SRTMGL1      : SRTM GL1 30m
+    - SRTMGL1_E    : SRTM GL1 Ellipsoidal 30m
+    - AW3D30       : ALOS World 3D 30m
+    - AW3D30_E     : ALOS World 3D Ellipsoidal 30m
+    - SRTM15Plus   : Global Bathymetry SRTM15+ V2.1 500m
+    - NASADEM      : NASADEM Global DEM
+    - COP30        : Copernicus Global DSM 30m
+    - COP90        : Copernicus Global DSM 90m
+    - EU_DTM       : DTM 30m
+    - GEDI_L3      : DTM 1000m
+    - GEBCOIceTopo    : Global Bathymetry 500m
+    - GEBCOSubIceTopo : Global Bathymetry 500m
+    - CA_MRDEM_DSM : DSM 30m
+    - CA_MRDEM_DTM : DTM 30m
+    """
     api_key = api_key or os.getenv("OPENTOPOGRAPHY_API_KEY")
     if not api_key:
         raise ValueError(
@@ -95,8 +171,62 @@ def add_z_from_opentopography(
     keep_geometry_old=True,
     verbose=True,
     api_key=None,
-    demtype="COP30",
+    demtype="AW3D30",
 ):
+    """
+    Add Z (elevation) values to geometries from an OpenTopography DEM.
+
+    Parameters
+    ----------
+    gdf_or_path : geopandas.GeoDataFrame or str or Path
+        Input GeoDataFrame or path to a file.
+    out_tiff_path : str or Path
+        Output path for the DEM GeoTIFF.
+    bounds_utm : bool, optional
+        If True, print message about bounds conversion (default True).
+    margin : float, optional
+        Margin (in degrees) to expand the bounds.
+    keep_geometry_old : bool, optional
+        If True, store original geometry in 'geometry_old' if Z exists.
+    verbose : bool, optional
+        If True, print progress messages.
+    api_key : str, optional
+        OpenTopography API key.
+    demtype : str, optional
+        DEM type (default "COP30").
+
+    Returns
+    -------
+    out_gdf : geopandas.GeoDataFrame
+        GeoDataFrame with Z values added to geometry and columns 'x', 'y', 'z'.
+    dem_path : str
+        Path to the DEM file used.
+
+    Raises
+    ------
+    ValueError
+        If input is empty or has no CRS.
+
+    Notes
+    -----
+    Available DEM types:
+
+    - SRTMGL3      : SRTM GL3 90m
+    - SRTMGL1      : SRTM GL1 30m
+    - SRTMGL1_E    : SRTM GL1 Ellipsoidal 30m
+    - AW3D30       : ALOS World 3D 30m
+    - AW3D30_E     : ALOS World 3D Ellipsoidal 30m
+    - SRTM15Plus   : Global Bathymetry SRTM15+ V2.1 500m
+    - NASADEM      : NASADEM Global DEM
+    - COP30        : Copernicus Global DSM 30m
+    - COP90        : Copernicus Global DSM 90m
+    - EU_DTM       : DTM 30m
+    - GEDI_L3      : DTM 1000m
+    - GEBCOIceTopo    : Global Bathymetry 500m
+    - GEBCOSubIceTopo : Global Bathymetry 500m
+    - CA_MRDEM_DSM : DSM 30m
+    - CA_MRDEM_DTM : DTM 30m
+    """
     if isinstance(gdf_or_path, (str, Path)):
         gdf = gpd.read_file(gdf_or_path)
     else:
@@ -136,7 +266,7 @@ def add_z_from_opentopography(
         if verbose and bounds_utm:
             print("Converting input bounds to WGS84 for OpenTopography request.")
 
-        dem_path = _download_opentopography_dem(
+        dem_path = download_opentopography_dem(
             bounds_wgs84=bounds_wgs84,
             out_tiff_path=out_tiff_path,
             demtype=demtype,
@@ -162,6 +292,7 @@ def add_z_from_opentopography(
             return vals
 
         def _add_z_to_geom(geom):
+            # Recursively add Z values sampled from the DEM to all geometry types
             if geom is None or geom.is_empty:
                 return geom
 
