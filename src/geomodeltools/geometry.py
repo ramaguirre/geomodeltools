@@ -8,6 +8,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 from pandas.api.types import is_numeric_dtype
+from shapely import make_valid
 from shapely.geometry import (
     GeometryCollection,
     LineString,
@@ -17,6 +18,93 @@ from shapely.geometry import (
     Point,
     Polygon,
 )
+from shapely.geometry.polygon import orient as orient_polygon
+
+
+def _extract_polygonal_geometry(geom):
+    if geom is None or geom.is_empty:
+        return geom
+
+    if isinstance(geom, (Polygon, MultiPolygon)):
+        return geom
+
+    if isinstance(geom, GeometryCollection):
+        polygons = []
+        for part in geom.geoms:
+            polygonal = _extract_polygonal_geometry(part)
+            if polygonal is None or polygonal.is_empty:
+                continue
+            if isinstance(polygonal, Polygon):
+                polygons.append(polygonal)
+            elif isinstance(polygonal, MultiPolygon):
+                polygons.extend(list(polygonal.geoms))
+
+        if not polygons:
+            return None
+        if len(polygons) == 1:
+            return polygons[0]
+        return MultiPolygon(polygons)
+
+    return None
+
+
+def _orient_polygonal_geometry(geom):
+    if geom is None or geom.is_empty:
+        return geom
+
+    if isinstance(geom, Polygon):
+        return orient_polygon(geom, sign=1.0)
+
+    if isinstance(geom, MultiPolygon):
+        return MultiPolygon([orient_polygon(poly, sign=1.0) for poly in geom.geoms])
+
+    return geom
+
+
+def clean_polygon_geometries(gdf_or_path, geometry_col="geometry", verbose=True, drop_empty=True):
+    if isinstance(gdf_or_path, (str, Path)):
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*invalid winding order.*|.*organizePolygons\(\).*|.*cannot be translated to Simple Geometry.*",
+                category=RuntimeWarning,
+            )
+            gdf = gpd.read_file(gdf_or_path)
+    else:
+        gdf = gdf_or_path.copy()
+
+    gdf = gdf.copy()
+    invalid_before = int((~gdf[geometry_col].is_valid).fillna(False).sum())
+
+    if verbose:
+        print(
+            "Pre-cleaning polygon geometries: fixing invalid shapes, keeping polygonal parts, and normalizing ring orientation."
+        )
+
+    def _clean_one(geom):
+        if geom is None or geom.is_empty:
+            return geom
+        cleaned = make_valid(geom)
+        cleaned = _extract_polygonal_geometry(cleaned)
+        cleaned = _orient_polygonal_geometry(cleaned)
+        return cleaned
+
+    gdf[geometry_col] = gdf[geometry_col].apply(_clean_one)
+
+    dropped = 0
+    if drop_empty:
+        valid_mask = gdf[geometry_col].notna() & (~gdf[geometry_col].is_empty)
+        dropped = int((~valid_mask).sum())
+        gdf = gdf.loc[valid_mask].copy()
+
+    invalid_after = int((~gdf[geometry_col].is_valid).fillna(False).sum())
+
+    if verbose:
+        print(
+            f"Pre-clean complete: invalid geometries {invalid_before} -> {invalid_after}; dropped {dropped} empty/non-polygon features."
+        )
+
+    return gdf
 
 
 def _coords_array_with_optional_z(linear_geom):

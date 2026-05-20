@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import requests
 from shapely.geometry import (
     GeometryCollection,
     LineString,
@@ -41,6 +43,50 @@ def _first_xyz(geom):
     return np.nan, np.nan, np.nan
 
 
+def _bounds_to_wgs84(gdf, margin=0.0):
+    gdf_wgs84 = gdf.to_crs(epsg=4326) if gdf.crs != "EPSG:4326" else gdf
+    west, south, east, north = gdf_wgs84.total_bounds.tolist()
+    margin = float(margin)
+    return [west - margin, south - margin, east + margin, north + margin]
+
+
+def _download_opentopography_dem(
+    bounds_wgs84,
+    out_tiff_path,
+    demtype="COP30",
+    api_key=None,
+    timeout=180,
+):
+    api_key = api_key or os.getenv("OPENTOPOGRAPHY_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "OpenTopography API key is required. Pass api_key=... or set OPENTOPOGRAPHY_API_KEY."
+        )
+
+    west, south, east, north = [float(v) for v in bounds_wgs84]
+    url = "https://portal.opentopography.org/API/globaldem"
+    params = {
+        "demtype": demtype,
+        "south": south,
+        "north": north,
+        "west": west,
+        "east": east,
+        "outputFormat": "GTiff",
+        "API_Key": api_key,
+    }
+
+    response = requests.get(url, params=params, timeout=timeout)
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"OpenTopography request failed ({response.status_code}): {response.text[:400]}"
+        )
+
+    out_tiff_path = Path(out_tiff_path)
+    out_tiff_path.parent.mkdir(parents=True, exist_ok=True)
+    out_tiff_path.write_bytes(response.content)
+    return str(out_tiff_path)
+
+
 def add_z_from_opentopography(
     gdf_or_path,
     out_tiff_path,
@@ -48,7 +94,8 @@ def add_z_from_opentopography(
     margin=0,
     keep_geometry_old=True,
     verbose=True,
-    dem_fetcher=None,
+    api_key=None,
+    demtype="COP30",
 ):
     if isinstance(gdf_or_path, (str, Path)):
         gdf = gpd.read_file(gdf_or_path)
@@ -77,7 +124,6 @@ def add_z_from_opentopography(
     elif had_z and verbose:
         print("Input already has elevation. Existing Z values will be replaced.")
 
-    bounds = gdf.total_bounds.tolist()
     out_tiff_path = Path(out_tiff_path)
     out_tiff_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -86,22 +132,15 @@ def add_z_from_opentopography(
         if verbose:
             print(f"Using existing DEM: {dem_path}")
     else:
-        if dem_fetcher is None:
-            try:
-                from Funciones_RAguirre import raster_RA
-            except ImportError as exc:
-                raise ImportError(
-                    "No DEM fetcher provided and Funciones_RAguirre.raster_RA is not available. "
-                    "Pass dem_fetcher=callable(bounds, out_tiff_path, bounds_utm, margin, return_xarray=False)."
-                ) from exc
-            dem_fetcher = raster_RA.download_opentopography
+        bounds_wgs84 = _bounds_to_wgs84(gdf, margin=margin)
+        if verbose and bounds_utm:
+            print("Converting input bounds to WGS84 for OpenTopography request.")
 
-        dem_path = dem_fetcher(
-            bounds,
-            out_tiff_path=str(out_tiff_path),
-            bounds_utm=bounds_utm,
-            margin=margin,
-            return_xarray=False,
+        dem_path = _download_opentopography_dem(
+            bounds_wgs84=bounds_wgs84,
+            out_tiff_path=out_tiff_path,
+            demtype=demtype,
+            api_key=api_key,
         )
         if verbose:
             print(f"DEM downloaded: {dem_path}")
