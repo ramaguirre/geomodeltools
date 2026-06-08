@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from . import _config as _cfg
+
 import geopandas as gpd
 import numpy as np
 import requests
@@ -133,7 +135,7 @@ def download_opentopography_dem(
     - CA_MRDEM_DSM : DSM 30m
     - CA_MRDEM_DTM : DTM 30m
     """
-    api_key = api_key or os.getenv("OPENTOPOGRAPHY_API_KEY")
+    api_key = api_key or os.getenv("OPENTOPOGRAPHY_API_KEY") or _cfg.OPENTOPOGRAPHY_API_KEY
     if not api_key:
         raise ValueError(
             "OpenTopography API key is required. Pass api_key=... or set OPENTOPOGRAPHY_API_KEY."
