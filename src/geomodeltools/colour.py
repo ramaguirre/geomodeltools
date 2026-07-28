@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import colorsys
+import json
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -114,3 +116,138 @@ def leapfrog_colour2dictionary(lfc_file_path: str | Path) -> dict[str, np.ndarra
 
 
 lfc2dict = leapfrog_colour2dictionary
+
+
+def cmyk_to_rgb(c: float, m: float, y: float, k: float) -> tuple[int, int, int]:
+    """Convert CMYK (0-100 each) to RGB (0-255 each)."""
+    r = 255 * (1 - c / 100) * (1 - k / 100)
+    g = 255 * (1 - m / 100) * (1 - k / 100)
+    b = 255 * (1 - y / 100) * (1 - k / 100)
+    return tuple(round(v) for v in (r, g, b))
+
+
+def hsv_to_rgb(h: float, s: float, v: float) -> tuple[int, int, int]:
+    """Convert HSV (H: 0-360, S/V: 0-100) to RGB (0-255 each)."""
+    r, g, b = colorsys.hsv_to_rgb(h / 360, s / 100, v / 100)
+    return tuple(round(c * 255) for c in (r, g, b))
+
+
+def cim_color_to_rgb(color: dict | None) -> tuple[int, int, int] | None:
+    """Convert a CIM color dict (CIMRGBColor, CIMCMYKColor, or CIMHSVColor) to an (r, g, b) tuple."""
+    if color is None:
+        return None
+    values = color['values']
+    if color['type'] == 'CIMRGBColor':
+        return tuple(round(v) for v in values[:3])
+    elif color['type'] == 'CIMCMYKColor':
+        return cmyk_to_rgb(*values[:4])
+    elif color['type'] == 'CIMHSVColor':
+        return hsv_to_rgb(*values[:3])
+    else:
+        raise ValueError(f"Unsupported color type: {color['type']}")
+
+
+def get_symbol_color(symbol_layer: dict) -> tuple[tuple[int, int, int], str] | tuple[None, None]:
+    """
+    Take a CIM symbol layer dict (as found in symbol_type_example_list) and
+    return the most representative color as (rgb, hex).
+
+    Handles: CIMSolidFill, CIMSolidStroke, CIMHatchFill, CIMPictureFill,
+    CIMVectorMarker, CIMCharacterMarker (recursing into nested symbols).
+    """
+    symbol_type = symbol_layer.get('type')
+
+    if symbol_type in ('CIMSolidFill', 'CIMSolidStroke'):
+        rgb = cim_color_to_rgb(symbol_layer['color'])
+
+    elif symbol_type == 'CIMHatchFill':
+        # color of the hatch lines themselves
+        line_layer = symbol_layer['lineSymbol']['symbolLayers'][0]
+        return get_symbol_color(line_layer)
+
+    elif symbol_type == 'CIMPictureFill':
+        # use the substitution whose old color is black (the pattern's "ink"),
+        # falling back to the first substitution if none matches
+        subs = symbol_layer.get('colorSubstitutions', [])
+        target = next(
+            (s for s in subs if cim_color_to_rgb(s['oldColor']) == (255, 255, 255)),
+            subs[0] if subs else None,
+        )
+        if target is None:
+            return None, None
+        rgb = cim_color_to_rgb(target['newColor'])
+
+    elif symbol_type in ('CIMVectorMarker',):
+        # dig into the first enabled marker graphic's nested symbol layer
+        graphics = [g for g in symbol_layer.get('markerGraphics', [])]
+        graphic = graphics[0] if graphics else None
+        if graphic is None:
+            return None, None
+        nested_layer = graphic['symbol']['symbolLayers'][0]
+        return get_symbol_color(nested_layer)
+
+    elif symbol_type == 'CIMCharacterMarker':
+        # prefer the first *enabled* nested layer if this is a list context,
+        # otherwise use its own nested polygon symbol fill color
+        nested_layer = symbol_layer['symbol']['symbolLayers'][0]
+        return get_symbol_color(nested_layer)
+
+    else:
+        raise ValueError(f"Unsupported symbol type: {symbol_type}")
+
+    if rgb is None:
+        return None, None
+
+    hex_color = '#{:02x}{:02x}{:02x}'.format(*rgb)
+    return rgb, hex_color
+
+
+def arcgis_lyr_to_leapfrog_lfc(lyr_file: str | Path, output_dir: str | Path, suffix: str = '') -> list[Path]:
+    """
+    Read an ArcGIS .lyr(x) JSON file and write one Leapfrog .lfc palette per
+    unique-values renderer field found in its layer definitions.
+
+    Parameters:
+    - lyr_file (str | Path): Path to the ArcGIS layer JSON file.
+    - output_dir (str | Path): Directory the .lfc files are written to (created if missing).
+    - suffix (str): Optional suffix appended to each output file's field name.
+
+    Returns:
+    list[Path]: Paths of the .lfc files written, one per renderer field.
+    """
+    with open(lyr_file, 'r', encoding='UTF-8') as f:
+        lyr_json = json.load(f)
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    written_paths = []
+    for layerDefinition in lyr_json['layerDefinitions']:
+        field_name = layerDefinition['renderer']['fields'][0]
+        cod_lito_color_dict = {}
+        failed_type = []
+        for i in layerDefinition['renderer']['groups']:
+            for j in i['classes']:
+                cod_lito = j['values'][0]['fieldValues'][0]
+                symbolLayers = j['symbol']['symbol']['symbolLayers']
+                sym = symbolLayers[0]
+                for symbolLayer in symbolLayers:
+                    if symbolLayer['type'] == 'CIMSolidFill':
+                        sym = symbolLayer
+                        break
+                try:
+                    rgb, hex_color = get_symbol_color(sym)
+                    if hex_color is None:
+                        raise ValueError("no resolvable colour for this symbol")
+                    print(f"{cod_lito:<10} {sym['type']:<20} rgb={rgb}  hex={hex_color}")
+                    cod_lito_color_dict[cod_lito] = hex_color
+                except Exception as e:
+                    failed_type.append(sym)
+                    print(f"Failed to get color for {sym['type']}: {e}")
+
+        if suffix:
+            field_name = f"{field_name}_{suffix}"
+        written_paths.append(leapfrog_colour_palette(cod_lito_color_dict, output_dir / f"{field_name}.lfc"))
+
+    return written_paths
+
