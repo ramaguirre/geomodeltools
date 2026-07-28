@@ -26,7 +26,10 @@ pts = bufferize_2d_polygons(gdf, feature_cols=["unit"], return_polydata=False)
 pts_z, dem_path = add_z_from_opentopography(
     pts,
     out_tiff_path=Path("data/dem.tif"),
-    bounds_utm=True,
-    margin=0,
+    margin_m=0,
 )
 ```
+
+By default, `add_z_from_opentopography` assumes PSAD56 / UTM zone 19S
+(EPSG:24879) for inputs with no CRS set, and writes the DEM GeoTIFF in that
+same CRS. Pass `crs=...` to target a different UTM zone or datum.
