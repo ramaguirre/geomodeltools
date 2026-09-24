@@ -10,9 +10,36 @@ Reusable helpers for 3D geological modeling workflows.
 
 ## Install
 
+From GitHub (a fixed version, no Git needed):
+
+```bash
+pip install https://github.com/ramaguirre/geomodeltools/archive/refs/tags/v0.1.0.zip
+```
+
+For development, from a clone of this repo:
+
 ```bash
 pip install -e .
 ```
+
+## OpenTopography API key
+
+Downloading DEMs needs a free OpenTopography API key. No key is bundled with the
+package; each user registers their own:
+
+1. Sign in (or create an account) at https://portal.opentopography.org, open your
+   **MyOpenTopo** dashboard, click **Get an API Key**, then **Request API key**, and copy it.
+2. Save it as the user environment variable `OPENTOPOGRAPHY_API_KEY`:
+   - Windows: Start menu > type "environment variables" > **Edit environment variables
+     for your account** > **New** > Name `OPENTOPOGRAPHY_API_KEY`, Value: your key.
+     Or in PowerShell:
+     `[Environment]::SetEnvironmentVariable("OPENTOPOGRAPHY_API_KEY", "<your key>", "User")`
+   - macOS / Linux: add `export OPENTOPOGRAPHY_API_KEY="<your key>"` to `~/.bashrc` or `~/.zshrc`.
+3. Close and reopen your editor so it picks up the variable.
+
+You can also pass `api_key="..."` to `add_z_from_opentopography` /
+`download_opentopography_dem`. If `out_tiff_path` already exists, it is reused and
+no key is needed.
 
 ## Quick example
 

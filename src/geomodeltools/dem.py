@@ -21,6 +21,35 @@ from shapely.geometry import (
     Polygon,
 )
 
+_MISSING_API_KEY_MSG = """No OpenTopography API key found.
+
+Downloading a DEM needs a free OpenTopography API key. To get one and register it:
+
+1. Get the key
+   - Create an account (or sign in) at https://portal.opentopography.org
+   - Open your "MyOpenTopo" dashboard and click "Get an API Key".
+   - Click "Request API key" and copy the key (32 letters and digits).
+
+2. Register it on this computer, as the environment variable OPENTOPOGRAPHY_API_KEY
+   Windows - either:
+     a) Start menu > type "environment variables" >
+        "Edit environment variables for your account" > under "User variables"
+        click "New" > Name: OPENTOPOGRAPHY_API_KEY, Value: <your key> > OK
+     b) or in PowerShell:
+        [Environment]::SetEnvironmentVariable("OPENTOPOGRAPHY_API_KEY", "<your key>", "User")
+   macOS / Linux: add this line to ~/.bashrc or ~/.zshrc:
+        export OPENTOPOGRAPHY_API_KEY="<your key>"
+
+3. Fully close and reopen your editor (VS Code, PyCharm, Jupyter), because programs
+   only read environment variables when they start. Then check it in Python:
+        import os; print(os.getenv("OPENTOPOGRAPHY_API_KEY"))
+
+Alternative for a one-off run: pass the key directly, e.g.
+    add_z_from_opentopography(..., api_key="<your key>")
+
+If you already have the DEM GeoTIFF, pass its path as out_tiff_path and no key is needed:
+the existing file is reused instead of downloaded."""
+
 
 def _first_xyz(geom):
     """
@@ -232,9 +261,7 @@ def download_opentopography_dem(
     """
     api_key = api_key or os.getenv("OPENTOPOGRAPHY_API_KEY") or _cfg.OPENTOPOGRAPHY_API_KEY
     if not api_key:
-        raise ValueError(
-            "OpenTopography API key is required. Pass api_key=... or set OPENTOPOGRAPHY_API_KEY."
-        )
+        raise ValueError(_MISSING_API_KEY_MSG)
 
     west, south, east, north = _densify_bounds_to_wgs84(
         bounds, crs=crs, margin_m=margin_m, max_segment_length=max_segment_length

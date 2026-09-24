@@ -1,7 +1,7 @@
-# Default OpenTopography API key bundled with the package.
-# Override at runtime by setting the OPENTOPOGRAPHY_API_KEY environment variable
-# or by passing api_key=... explicitly to the function.
-OPENTOPOGRAPHY_API_KEY = "a4176ae09b21a2d6753b1e7a84338da6"
+# OpenTopography API key. No key is bundled with the package: each user sets
+# their own in the OPENTOPOGRAPHY_API_KEY environment variable (see README),
+# or passes api_key=... explicitly to the function.
+OPENTOPOGRAPHY_API_KEY = None
 
 # Default assumed/output CRS: PSAD56 / UTM zone 19S.
 # Used to fill in a missing CRS on input geometries, and as the default
