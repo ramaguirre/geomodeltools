@@ -41,6 +41,18 @@ You can also pass `api_key="..."` to `add_z_from_opentopography` /
 `download_opentopography_dem`. If `out_tiff_path` already exists, it is reused and
 no key is needed.
 
+## Sample data
+
+Public SERNAGEOMIN geological map GIS packages (source and copyright: SERNAGEOMIN)
+are attached to the
+[`sample-data-sernageomin`](https://github.com/ramaguirre/geomodeltools/releases/tag/sample-data-sernageomin)
+release, not committed to the repo. Download them into `sample_data/sernageomin/`
+(git-ignored):
+
+```bash
+gh release download sample-data-sernageomin -R ramaguirre/geomodeltools -D sample_data/sernageomin
+```
+
 ## Quick example
 
 ```python
