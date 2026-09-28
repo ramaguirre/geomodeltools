@@ -53,6 +53,22 @@ release, not committed to the repo. Download them into `sample_data/sernageomin/
 gh release download sample-data-sernageomin -R ramaguirre/geomodeltools -D sample_data/sernageomin
 ```
 
+### Example notebook
+
+[`notebooks/example_sernageomin_m201_points.ipynb`](notebooks/example_sernageomin_m201_points.ipynb)
+runs the full workflow on the M201 *Carrizalillo – El Tofo* 1:100,000 map. It downloads the
+release zip itself, clips the geological units to an area of interest of about 37 × 55 km,
+reprojects to PSAD56 / UTM 19S, simplifies within map precision, buffers the polygons into
+about 156k labelled points, optionally adds DEM elevations, and exports GeoPackage, CSV and
+VTK files to `notebooks/outputs/m201_example/`. The parameter choices for this map scale are
+explained in the notebook.
+
+The notebook also shows a datum pitfall. Converting SIRGAS 1995 (the CRS of the SERNAGEOMIN
+data, EPSG:31994) directly to EPSG:24879 with `to_crs` uses PROJ's *ballpark* transformation,
+which applies no datum shift and leaves every point about 460 m out. Go through WGS 84 instead:
+`gdf.to_crs(4326).to_crs(24879)`. That route uses EPSG *PSAD56 to WGS 84 (16)*, which is
+accurate to about 17 m.
+
 ## Quick example
 
 ```python
