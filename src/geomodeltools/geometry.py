@@ -7,6 +7,7 @@ from pathlib import Path
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import shapely
 from pandas.api.types import is_numeric_dtype
 from shapely import make_valid
 from shapely.geometry import (
@@ -263,7 +264,10 @@ def geometries_to_points(gdf_or_path, geometry_col="geometry", z_col="z"):
 
         attrs = row.drop(labels=[geometry_col]).to_dict()
 
-        if isinstance(geom, LineString):
+        if isinstance(geom, Point):
+            _emit_points(attrs, geom, "Point")
+
+        elif isinstance(geom, LineString):
             _emit_points(attrs, geom, "LineString")
 
         elif isinstance(geom, MultiLineString):
@@ -291,19 +295,211 @@ def geometries_to_points(gdf_or_path, geometry_col="geometry", z_col="z"):
     return out
 
 
+def _mm_on_ground(map_scale):
+    """Ground length (CRS units, assumed metres) of 1 mm on a map at `map_scale`."""
+    return float(map_scale) / 1000.0
+
+
+def _centreline(poly, spacing, min_frac=0.3):
+    """Approximate medial axis of a polygon, resampled every `spacing`, or None.
+
+    Built from the Voronoi edges of the densified boundary that lie strictly
+    inside the polygon. Spurs running out to boundary vertices are pruned by
+    dropping edges closer to the boundary than `min_frac` times the mean
+    half-width (area / perimeter), and leftover fragments shorter than
+    ``spacing / 2`` are dropped (the longest piece is always kept).
+    """
+    half_width = poly.area / poly.length
+    # Sample the boundary finer than the polygon is wide, but cap the sample
+    # count (long polygons) and floor the spacing at 1 unit (slivers).
+    sample = max(half_width / 2.0, poly.length / 20000.0, 1.0)
+    boundary_pts = shapely.MultiPoint(shapely.get_coordinates(shapely.segmentize(poly, sample)))
+    edges = shapely.get_parts(shapely.voronoi_polygons(boundary_pts, only_edges=True))
+    edges = edges[shapely.contains_properly(poly, edges)]
+    if len(edges) == 0:
+        return None
+    mid = shapely.line_interpolate_point(edges, 0.5, normalized=True)
+    edges = edges[shapely.distance(mid, poly.boundary) >= min_frac * half_width]
+    if len(edges) == 0:
+        return None
+    pieces = shapely.get_parts(shapely.line_merge(MultiLineString(list(edges))))
+    lengths = shapely.length(pieces)
+    keep = (lengths >= spacing / 2.0) | (lengths == lengths.max())
+    lines = []
+    for line, length in zip(pieces[keep], lengths[keep]):
+        n = max(int(np.ceil(length / spacing)), 1)
+        lines.append(LineString(shapely.line_interpolate_point(line, np.linspace(0.0, length, n + 1))))
+    return MultiLineString(lines)
+
+
+def _adaptive_layers(gdf, configured_buffers, narrow_half_width, min_half_width, ring_fraction, spacing):
+    """Extra geometries for polygons too narrow for the configured buffers.
+
+    Returns a GeoDataFrame of polygons (extra inward rings), lines
+    (centrelines) and points (fallback), carrying the input attributes and a
+    `_source` column.
+    """
+    parts = gdf.explode(ignore_index=True)
+    second = configured_buffers[1] if len(configured_buffers) > 1 else configured_buffers[0]
+    rows = []
+    for _, row in parts.iterrows():
+        poly = row.geometry
+        if poly is None or poly.is_empty or poly.area <= 0:
+            continue
+        half_width = poly.area / poly.length
+        few_rings = poly.buffer(second).is_empty  # configured buffers give <= 1 ring
+        produced = not poly.buffer(configured_buffers[0]).is_empty
+
+        if few_rings and half_width >= min_half_width:
+            ring = poly.buffer(-ring_fraction * half_width)
+            if not ring.is_empty:
+                rows.append({**row.to_dict(), "geometry": ring, "_source": "adaptive_ring"})
+                produced = True
+
+        if half_width < narrow_half_width:
+            line = _centreline(poly, spacing)
+            if line is not None:
+                rows.append({**row.to_dict(), "geometry": line, "_source": "centreline"})
+                produced = True
+
+        if not produced:
+            rows.append({**row.to_dict(), "geometry": poly.point_on_surface(), "_source": "fallback_point"})
+
+    if not rows:
+        return None
+    return gpd.GeoDataFrame(rows, geometry="geometry", crs=gdf.crs)
+
+
 def bufferize_2d_polygons(
     geopandas_2d_polygons,
     feature_cols,
     level_col_or_z=0,
-    increments=(0.1, 1, 10, 50),
-    repeats=(2, 10, 10, 10),
-    segment_max_length=5,
+    increments=None,
+    repeats=None,
+    segment_max_length=None,
     return_polydata=True,
     verbose=True,
     max_extra_steps=100,
+    map_scale=None,
+    adaptive=False,
+    simplify_tolerance=None,
+    narrow_half_width=None,
+    min_half_width=None,
+    ring_fraction=0.4,
 ):
+    """
+    Turn 2D polygons into labelled points on a series of inward buffers.
+
+    Each polygon is shrunk by increasing distances; every buffer outline is
+    densified and converted to points that carry the polygon's attributes.
+    Buffering continues past the configured steps (every 2x the last
+    increment) until each polygon has shrunk away.
+
+    Parameters
+    ----------
+    geopandas_2d_polygons : geopandas.GeoDataFrame
+        Polygons in a projected CRS with metre units.
+    feature_cols : str or list of str
+        Columns copied onto the output points (e.g. the unit code).
+    level_col_or_z : str, float or array-like, optional
+        Z for the points: a column name, a constant (default 0), or an array
+        matching the output point count.
+    increments, repeats : sequence of float / int, optional
+        Buffer step sizes and how many times each is repeated. The cumulative
+        sum gives the buffer distances, e.g. (50, 200) with (2, 5) gives
+        -50, -100, -300, ..., -1100 m. Pass these to match the interior
+        point spacing to your model resolution.
+    segment_max_length : float, optional
+        Maximum point spacing along each buffer outline.
+    return_polydata : bool, optional
+        If True (default) also return a PyVista point cloud.
+    verbose : bool, optional
+        Print progress.
+    max_extra_steps : int, optional
+        Maximum buffers added after the configured ones.
+    map_scale : float, optional
+        Scale denominator of the source map (e.g. 100_000 for 1:100,000).
+        When given, every parameter left as None is derived from it using the
+        map's drawing precision; see the table below. Explicit values always
+        win.
+    adaptive : bool, optional
+        If True, polygons too narrow for the configured buffers also get
+        points sized to their own width (default False):
+
+        - a centreline (approximate medial axis) when the mean half-width
+          ``area / perimeter`` is below `narrow_half_width`; it stays
+          continuous through necks where inward buffers break apart;
+        - one extra ring at ``ring_fraction * half-width`` when the
+          configured buffers give at most one ring and the half-width is at
+          least `min_half_width` (thinner polygons are effectively lines at
+          map scale, so they only get the centreline);
+        - a single interior point as a last resort, so no polygon is left
+          without points.
+
+        Adds a ``point_source`` column: ``ring``, ``adaptive_ring``,
+        ``centreline`` or ``fallback_point``.
+    simplify_tolerance : float, optional
+        Douglas-Peucker tolerance applied to the input polygons first
+        (topology preserving; polygons that collapse are dropped).
+    narrow_half_width, min_half_width : float, optional
+        Adaptive-mode thresholds on the mean half-width (see `adaptive`).
+    ring_fraction : float, optional
+        Adaptive-ring distance as a fraction of the mean half-width (0.4).
+
+    Defaults
+    --------
+    With ``m = map_scale / 1000`` (1 mm on the map, in metres on the ground;
+    contacts are drawn to about 0.5 mm):
+
+    ====================  ==================  ===========  ===============
+    Parameter             From `map_scale`    1:100,000    No `map_scale`
+    ====================  ==================  ===========  ===============
+    simplify_tolerance    0.25 m              25           0 (off)
+    segment_max_length    1 m                 100          5
+    increments            (0.5 m, 2 m)        (50, 200)    (0.1, 1, 10, 50)
+    repeats               (2, 5)              (2, 5)       (2, 10, 10, 10)
+    narrow_half_width     1 m                 100          2 x increments[0]
+    min_half_width        0.25 m              25           increments[0] / 2
+    ====================  ==================  ===========  ===============
+
+    Returns
+    -------
+    geopandas.GeoDataFrame, or (GeoDataFrame, pyvista.PolyData) if
+    `return_polydata` is True.
+    """
     if not hasattr(geopandas_2d_polygons, "geometry"):
         raise TypeError("geopandas_2d_polygons must be a GeoDataFrame with a geometry column.")
+
+    if map_scale is not None:
+        if map_scale <= 0:
+            raise ValueError("map_scale must be > 0.")
+        m = _mm_on_ground(map_scale)
+        scale_defaults = dict(
+            simplify_tolerance=0.25 * m,
+            segment_max_length=1.0 * m,
+            increments=(0.5 * m, 2.0 * m),
+            repeats=(2, 5),
+        )
+    else:
+        scale_defaults = dict(
+            simplify_tolerance=0.0,
+            segment_max_length=5,
+            increments=(0.1, 1, 10, 50),
+            repeats=(2, 10, 10, 10),
+        )
+    if (increments is None) != (repeats is None):
+        raise ValueError("Pass increments and repeats together (or neither).")
+    if increments is None:
+        increments, repeats = scale_defaults["increments"], scale_defaults["repeats"]
+    if segment_max_length is None:
+        segment_max_length = scale_defaults["segment_max_length"]
+    if simplify_tolerance is None:
+        simplify_tolerance = scale_defaults["simplify_tolerance"]
+    first_step = float(abs(increments[0]))
+    if narrow_half_width is None:
+        narrow_half_width = 1.0 * _mm_on_ground(map_scale) if map_scale is not None else 2.0 * first_step
+    if min_half_width is None:
+        min_half_width = 0.25 * _mm_on_ground(map_scale) if map_scale is not None else first_step / 2.0
 
     if len(increments) != len(repeats):
         raise ValueError("increments and repeats must have the same length.")
@@ -323,6 +519,13 @@ def bufferize_2d_polygons(
     missing_feature_cols = [c for c in feature_cols if c not in gdf.columns]
     if missing_feature_cols:
         raise KeyError(f"Missing feature columns: {missing_feature_cols}")
+
+    if simplify_tolerance > 0:
+        gdf["geometry"] = gdf.geometry.simplify(simplify_tolerance, preserve_topology=True)
+        keep = gdf.geometry.notna() & ~gdf.geometry.is_empty & (gdf.geometry.area > 0)
+        if verbose and (~keep).any():
+            print(f"Simplify ({simplify_tolerance:g}): dropped {int((~keep).sum())} collapsed polygons.")
+        gdf = gdf[keep].copy()
 
     increments_arr = np.asarray(increments, dtype=float)
     repeats_arr = np.asarray(repeats, dtype=int)
@@ -361,6 +564,23 @@ def bufferize_2d_polygons(
         layer["_buffer_distance"] = buffer_distance
         buffered_layers.append(layer)
         step += 1
+
+    for layer in buffered_layers:
+        layer["_source"] = "ring"
+
+    if adaptive:
+        extra = _adaptive_layers(
+            gdf,
+            configured_buffers,
+            narrow_half_width=narrow_half_width,
+            min_half_width=min_half_width,
+            ring_fraction=ring_fraction,
+            spacing=segment_max_length,
+        )
+        if extra is not None:
+            if verbose:
+                print(f"Adaptive: {extra['_source'].value_counts().to_dict()}")
+            buffered_layers.append(extra)
 
     zcol = level_col_or_z if isinstance(level_col_or_z, str) else "z"
 
@@ -407,6 +627,9 @@ def bufferize_2d_polygons(
 
     for feat in feature_cols:
         outdf[feat] = points_gdf[feat].to_numpy()
+
+    if adaptive:
+        outdf["point_source"] = points_gdf["_source"].to_numpy()
 
     z_numeric = pd.to_numeric(outdf[zcol], errors="coerce")
     geometry = gpd.points_from_xy(outdf["x"], outdf["y"], z=z_numeric)

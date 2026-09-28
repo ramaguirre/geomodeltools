@@ -5,7 +5,8 @@ Reusable helpers for 3D geological modeling workflows.
 ## What it includes
 
 - Geometry densification and point extraction for line and polygon features.
-- Inward polygon buffering with optional PyVista point cloud output.
+- Inward polygon buffering with optional PyVista point cloud output, with spacings
+  derived from the map scale and an adaptive mode for narrow polygons.
 - DEM-based Z assignment using OpenTopography rasters.
 
 ## Install
@@ -58,10 +59,10 @@ gh release download sample-data-sernageomin -R ramaguirre/geomodeltools -D sampl
 [`notebooks/example_sernageomin_m201_points.ipynb`](notebooks/example_sernageomin_m201_points.ipynb)
 runs the full workflow on the M201 *Carrizalillo – El Tofo* 1:100,000 map. It downloads the
 release zip itself, clips the geological units to an area of interest of about 37 × 55 km,
-reprojects to PSAD56 / UTM 19S, simplifies within map precision, buffers the polygons into
-about 156k labelled points, optionally adds DEM elevations, and exports GeoPackage, CSV and
-VTK files to `notebooks/outputs/m201_example/`. The parameter choices for this map scale are
-explained in the notebook.
+reprojects to PSAD56 / UTM 19S, buffers the polygons into about 207k labelled points with
+`map_scale=100_000, adaptive=True`, optionally adds DEM elevations, and exports GeoPackage,
+CSV and VTK files to `notebooks/outputs/m201_example/`. It also compares fixed rings with
+the adaptive mode.
 
 The notebook also shows a datum pitfall. Converting SIRGAS 1995 (the CRS of the SERNAGEOMIN
 data, EPSG:31994) directly to EPSG:24879 with `to_crs` uses PROJ's *ballpark* transformation,
@@ -77,7 +78,12 @@ import geopandas as gpd
 from geomodeltools import bufferize_2d_polygons, add_z_from_opentopography
 
 gdf = gpd.read_file("my_polygons.shp")
-pts = bufferize_2d_polygons(gdf, feature_cols=["unit"], return_polydata=False)
+# map_scale sets simplification, point spacing and buffer distances from the map's
+# drawing precision; adaptive=True gives narrow units (dykes, thin beds) a centreline
+# so no polygon is left without points. See the bufferize_2d_polygons docstring.
+pts = bufferize_2d_polygons(
+    gdf, feature_cols=["unit"], map_scale=100_000, adaptive=True, return_polydata=False
+)
 pts_z, dem_path = add_z_from_opentopography(
     pts,
     out_tiff_path=Path("data/dem.tif"),
