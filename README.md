@@ -91,6 +91,28 @@ pts_z, dem_path = add_z_from_opentopography(
 )
 ```
 
+### Lines (faults, contacts, traces)
+
+Lines need no buffering: densify them, drape them on the DEM, and export one point per
+vertex. `densify_geometries` adds vertices so none is more than `spacing` apart (the
+original vertices are kept), `add_z_from_opentopography` samples the DEM at every vertex,
+and `geometries_to_points` writes x/y/z points that keep the line's attributes plus
+`part_id` (for multi-part lines) and `vertex_id` (order along the line).
+
+```python
+from geomodeltools import densify_geometries, add_z_from_opentopography, geometries_to_points
+
+faults = gpd.read_file("my_faults.shp")                  # LineString / MultiLineString
+dense = densify_geometries(faults, spacing=25)           # a vertex at least every 25 m
+draped, dem_path = add_z_from_opentopography(dense, out_tiff_path=Path("data/dem.tif"))
+pts = geometries_to_points(draped)                       # x/y/z + attributes, per vertex
+pts[["geometry_x", "geometry_y", "z", "name", "part_id", "vertex_id"]].to_csv("faults_xyz.csv", index=False)
+```
+
+The DEM value is the cell the vertex falls in (no interpolation), so pick `spacing`
+near the DEM resolution (about 30 m for the 1 arc-second products); a finer spacing only
+repeats values.
+
 By default, `add_z_from_opentopography` assumes PSAD56 / UTM zone 19S
 (EPSG:24879) for inputs with no CRS set, and writes the DEM GeoTIFF in that
 same CRS. Pass `crs=...` to target a different UTM zone or datum.
