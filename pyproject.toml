@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geomodeltools"
-version = "0.1.0"
+version = "0.2.0"
 description = "Utilities for 3D geological modeling with GeoPandas and DEM workflows."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,6 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 viz = ["pyvista>=0.43"]
+dev = ["pytest>=7"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
