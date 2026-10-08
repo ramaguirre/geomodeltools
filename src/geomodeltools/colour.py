@@ -132,8 +132,21 @@ def hsv_to_rgb(h: float, s: float, v: float) -> tuple[int, int, int]:
     return tuple(round(c * 255) for c in (r, g, b))
 
 
+def lab_to_rgb(L: float, a: float, b: float) -> tuple[int, int, int]:
+    """Convert CIE L*a*b* (D65 white) to sRGB (0-255 each), clipped to the gamut."""
+    fy = (L + 16) / 116
+    fx, fz = fy + a / 500, fy - b / 200
+    f = lambda t: t ** 3 if t ** 3 > 0.008856 else (t - 16 / 116) / 7.787
+    X, Y, Z = 0.95047 * f(fx), f(fy), 1.08883 * f(fz)
+    linear = (3.2406 * X - 1.5372 * Y - 0.4986 * Z,
+              -0.9689 * X + 1.8758 * Y + 0.0415 * Z,
+              0.0557 * X - 0.2040 * Y + 1.0570 * Z)
+    encode = lambda c: 12.92 * c if c <= 0.0031308 else 1.055 * max(c, 0) ** (1 / 2.4) - 0.055
+    return tuple(int(round(min(255, max(0, 255 * encode(c))))) for c in linear)
+
+
 def cim_color_to_rgb(color: dict | None) -> tuple[int, int, int] | None:
-    """Convert a CIM color dict (CIMRGBColor, CIMCMYKColor, or CIMHSVColor) to an (r, g, b) tuple."""
+    """Convert a CIM color dict (CIMRGBColor, CIMCMYKColor, CIMHSVColor, CIMGrayColor or CIMLABColor) to an (r, g, b) tuple."""
     if color is None:
         return None
     values = color['values']
@@ -143,6 +156,11 @@ def cim_color_to_rgb(color: dict | None) -> tuple[int, int, int] | None:
         return cmyk_to_rgb(*values[:4])
     elif color['type'] == 'CIMHSVColor':
         return hsv_to_rgb(*values[:3])
+    elif color['type'] == 'CIMGrayColor':
+        grey = round(255 * values[0] / 100)
+        return (grey, grey, grey)
+    elif color['type'] == 'CIMLABColor':
+        return lab_to_rgb(*values[:3])
     else:
         raise ValueError(f"Unsupported color type: {color['type']}")
 
@@ -200,6 +218,103 @@ def get_symbol_color(symbol_layer: dict) -> tuple[tuple[int, int, int], str] | t
 
     hex_color = '#{:02x}{:02x}{:02x}'.format(*rgb)
     return rgb, hex_color
+
+
+def _safe_rgb(color):
+    try:
+        return cim_color_to_rgb(color)
+    except (ValueError, KeyError, IndexError):
+        return None
+
+
+def _enabled(layers):
+    return (l for l in layers if l.get('enable', True))
+
+
+def _stroke_colour(layers):
+    for lyr in _enabled(layers):
+        if lyr.get('type') == 'CIMSolidStroke' and lyr.get('width', 1) > 0 and lyr.get('color'):
+            return _safe_rgb(lyr['color'])
+
+
+def _first_colour(node):
+    """First colour found anywhere inside an enabled symbol part (markers on a polygon or along a line)."""
+    if isinstance(node, dict):
+        if node.get('enable', True) is False:
+            return None
+        if str(node.get('color', {}).get('type', '')).endswith('Color'):
+            return _safe_rgb(node['color'])
+        node = list(node.values())
+    for child in node if isinstance(node, list) else []:
+        rgb = _first_colour(child)
+        if rgb:
+            return rgb
+    return None
+
+
+def cim_symbol_color(symbol: dict, kind: str) -> tuple[int, int, int] | None:
+    """The colour a person sees for a whole CIM symbol (all its layers), as RGB, or None.
+
+    ``kind`` is ``'polygon'`` or ``'line'``. Polygons: the solid fill, else the hatch line, else
+    the colour that replaces a pattern fill's white background. Then (and for lines) the outline
+    stroke, else the first colour inside a marker. Unlike `get_symbol_color`, which reads one
+    symbol layer, this looks at the whole symbol and never raises on unsupported parts.
+    """
+    layers = symbol.get('symbol', symbol).get('symbolLayers', [])
+    if kind == 'polygon':
+        for lyr in _enabled(layers):
+            if lyr.get('type') == 'CIMSolidFill' and lyr.get('color'):
+                return _safe_rgb(lyr['color'])
+        for lyr in _enabled(layers):
+            if lyr.get('type') == 'CIMHatchFill':
+                rgb = _stroke_colour(lyr.get('lineSymbol', {}).get('symbolLayers', []))
+                if rgb:
+                    return rgb
+        for lyr in _enabled(layers):
+            if lyr.get('type') == 'CIMPictureFill':
+                subs = {tuple(s['oldColor']['values'][:3]): s['newColor'] for s in lyr.get('colorSubstitutions', [])}
+                if (255, 255, 255) in subs:
+                    return _safe_rgb(subs[(255, 255, 255)])
+    return _stroke_colour(layers) or _first_colour(layers)
+
+
+def read_mapx_symbology(mapx: str | Path, dataset: str, kind: str) -> dict | None:
+    """Colours of the map layer drawn from `dataset` in an ArcGIS .mapx (JSON map definition).
+
+    Returns ``{'fields': [...], 'classes': {value tuple: rgb}, 'default': rgb, 'layer': name}``,
+    or None when no layer draws that dataset. A dataset drawn twice (say a plain contact line and
+    an interpreted one) takes the unique-value layer, which carries the categories. ``kind`` is
+    ``'polygon'`` or ``'line'``; see `cim_symbol_color`.
+    """
+    layers = [l for l in json.loads(Path(mapx).read_text(encoding='utf-8'))['layerDefinitions']
+              if l.get('featureTable', {}).get('dataConnection', {}).get('dataset') == dataset and 'renderer' in l]
+    layers.sort(key=lambda l: l['renderer']['type'] != 'CIMUniqueValueRenderer')
+    if not layers:
+        return None
+    rend = layers[0]['renderer']
+    if rend['type'] == 'CIMSimpleRenderer':
+        return {'fields': [], 'classes': {}, 'default': cim_symbol_color(rend['symbol'], kind), 'layer': layers[0]['name']}
+    classes = {}
+    for grp in rend.get('groups', []):
+        for cls in grp['classes']:
+            for uv in cls['values']:
+                classes[tuple(str(x) for x in uv['fieldValues'])] = cim_symbol_color(cls['symbol'], kind)
+    default = cim_symbol_color(rend['defaultSymbol'], kind) if rend.get('defaultSymbol') else None
+    return {'fields': rend['fields'], 'classes': classes, 'default': default, 'layer': layers[0]['name']}
+
+
+def symbology_colors(df, symbology: dict | None) -> list[tuple[int, int, int] | None]:
+    """RGB per row of `df`: its class colour in the map, else the layer default, else None.
+
+    `df` holds the layer's attribute columns with the values the map drew (blank and missing
+    values match a blank class). Returns an empty list when `symbology` is None.
+    """
+    if not symbology:
+        return []
+    if not symbology['fields']:
+        return [symbology['default']] * len(df)
+    vals = df[symbology['fields']].astype('string').fillna('').apply(lambda c: c.str.strip())
+    return [symbology['classes'].get(tuple(row), symbology['default']) for row in vals.itertuples(index=False, name=None)]
 
 
 def arcgis_lyr_to_leapfrog_lfc(lyr_file: str | Path, output_dir: str | Path, suffix: str = '') -> list[Path]:
