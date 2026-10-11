@@ -1,13 +1,14 @@
 """Command-line entry points for quick EDA and contact plots.
 
 Lets the director run these from a terminal against a CSV, no notebook needed. Installed
-as the `geomodeltools-eda` and `geomodeltools-contact` console scripts (see
-pyproject.toml's `[project.scripts]`).
+as the `geomodeltools-eda`, `geomodeltools-contact` and `geomodeltools-report` console
+scripts (see pyproject.toml's `[project.scripts]`).
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib
@@ -18,6 +19,7 @@ import pandas as pd  # noqa: E402
 
 from .contacts import contact_plot  # noqa: E402
 from .eda import cat_vs_cat, categorical_eda, quick_eda  # noqa: E402
+from .report import write_html  # noqa: E402
 
 
 def _read_table(path: Path) -> pd.DataFrame:
@@ -100,3 +102,32 @@ def contact_main(argv: list[str] | None = None) -> None:
         weight=args.weight,
     )
     _save(fig, args.out)
+
+
+def report_main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="geomodeltools-report",
+        description="Build a self-contained, interactive HTML EDA/contact-plot report: open it in any "
+        "browser, no server or Node needed.",
+    )
+    parser.add_argument("csv", type=Path, help="Input CSV/parquet file.")
+    parser.add_argument("--numeric", nargs="+", default=[], help="Numeric columns to include.")
+    parser.add_argument("--categorical", nargs="+", default=[], help="Categorical columns to include.")
+    parser.add_argument("--weight", help="Optional column of per-row weights.")
+    parser.add_argument(
+        "--contacts-json", type=Path, default=None,
+        help="Path to a JSON file: a list of contact-plot scenarios, each a dict with coords/unit/inside/"
+        "outside and value and/or category (see build_report's docstring for the full set of keys).",
+    )
+    parser.add_argument("--title", default="geomodeltools — EDA report", help="Page title.")
+    parser.add_argument("-o", "--out", type=Path, default=Path("report.html"), help="Output HTML path.")
+    args = parser.parse_args(argv)
+
+    df = _read_table(args.csv)
+    contacts = json.loads(args.contacts_json.read_text(encoding="utf-8")) if args.contacts_json else None
+
+    out = write_html(
+        df, args.out, title=args.title,
+        numeric=args.numeric, categorical=args.categorical, contacts=contacts, weight=args.weight,
+    )
+    print(f"Wrote {out}")

@@ -30,9 +30,13 @@ dev = ["pytest>=7"]
 [project.scripts]
 geomodeltools-eda = "geomodeltools.cli:eda_main"
 geomodeltools-contact = "geomodeltools.cli:contact_main"
+geomodeltools-report = "geomodeltools.cli:report_main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+geomodeltools = ["static/*.js"]

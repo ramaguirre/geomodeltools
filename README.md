@@ -10,6 +10,8 @@ Reusable helpers for 3D geological modeling workflows.
 - DEM-based Z assignment using OpenTopography rasters.
 - Quick EDA and contact plots for numeric and categorical unit attributes (`quick_eda`,
   `categorical_eda`, `cat_vs_cat`, `contact_plot`), also from the command line.
+- A self-contained, interactive HTML report of the same plots (`write_html`): open it in
+  any browser, no server, no Node, nothing to install.
 
 ## Install
 
@@ -164,3 +166,46 @@ repo (`quick_eda`, `violin_by_cat`, `contact_interactive_cutoff`, `bar_cat_vs_ca
 rewritten here with no Jupyter/seaborn dependency and a `scipy.spatial.cKDTree` distance
 calculation in place of the original's batched `cdist` loop. That repo is unchanged and
 stays the reference implementation.
+
+## HTML report (interactive, no Python needed to view)
+
+`write_html` builds one HTML file with dropdowns for every numeric/categorical column you
+give it, Plotly charts (pan/zoom/hover), and a tab per kind of plot (Numeric, Categorical,
+Pairs, Contacts). It is self-contained — Plotly is inlined, not loaded from a CDN — so it
+opens straight from disk and can be emailed or dropped in a shared folder.
+
+```python
+from geomodeltools import write_html
+
+write_html(
+    df, "report.html",
+    numeric=["cu_pct", "au_gpt"],        # each gets an overall panel + one per categorical column
+    categorical=["lithology", "alteration"],  # each gets a frequency panel; auto-paired for composition
+    contacts=[{                           # each scenario gets a profile and/or composition panel
+        "coords": ["x", "y", "z"], "unit": "lithology",
+        "inside": "Sulfide", "outside": "Waste",
+        "value": "cu_pct", "category": "alteration",
+        "label": "Sulfide / Waste contact",
+    }],
+    weight="length",
+)
+```
+
+Or from a terminal (contact scenarios go in a small JSON file — see `build_report`'s
+docstring for the full set of keys each one takes):
+
+```bash
+geomodeltools-report data.csv --numeric cu_pct au_gpt --categorical lithology alteration -o report.html
+```
+
+Everything is computed once in Python (`build_report`, via the same `*_data()` functions
+`quick_eda`/`categorical_eda`/`cat_vs_cat` use for their static figures) and shipped to the
+browser as JSON; the JS only turns that into Plotly traces; it never recomputes a
+probability position, a weighted mean or a contact-distance bin itself — so the numbers in
+the report and in a `quick_eda(...)` figure never drift apart. Only histogram/violin/bar
+shapes are built from raw values client-side, which is Plotly's own job, the same as
+matplotlib's `ax.hist`/`ax.violinplot` do it internally.
+
+`src/geomodeltools/static/plotly.min.js` is vendored (copied from the `swath_local` repo's
+own vendoring of it); see `THIRD-PARTY-NOTICES.md`. `static/report.js` is hand-written plain
+JS with no build step — edit it directly, no bundler to run.

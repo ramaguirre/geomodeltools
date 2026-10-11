@@ -2,10 +2,20 @@
 the numbers behind the plots, not pixel output.
 """
 
+import json
+
 import pandas as pd
 import pytest
 
-from geomodeltools import cat_vs_cat, categorical_eda, category_summary, quick_eda
+from geomodeltools import (
+    cat_vs_cat,
+    cat_vs_cat_data,
+    categorical_eda,
+    categorical_eda_data,
+    category_summary,
+    quick_eda,
+    quick_eda_data,
+)
 
 
 def test_category_summary_matches_hand_computed_stats():
@@ -61,3 +71,37 @@ def test_cat_vs_cat_produces_one_stacked_bar_segment_per_cell():
     ax = fig.axes[0]
     # 2 distinct y-values x 2 distinct x-categories = 4 stacked bar segments
     assert len(ax.patches) == 4
+
+
+def test_quick_eda_data_is_json_ready_and_matches_the_figure_it_drives():
+    df = pd.DataFrame({"value": [1.0, 2.0, 10.0, 11.0], "unit": ["lo", "lo", "hi", "hi"]})
+
+    overall = quick_eda_data(df, "value")
+    assert overall["mode"] == "overall"
+    json.dumps(overall)  # plain Python types only, no numpy scalars
+
+    by_cat = quick_eda_data(df, "value", category="unit")
+    assert by_cat["mode"] == "by_category"
+    assert by_cat["order"] == ["lo", "hi"]  # same ordering the matplotlib figure uses
+    assert by_cat["series"]["lo"]["values"] == [1.0, 2.0]
+    assert by_cat["summary"]["hi"]["mean"] == pytest.approx(10.5)
+    json.dumps(by_cat)
+
+
+def test_categorical_eda_data_matches_the_figure_it_drives():
+    df = pd.DataFrame({"unit": ["x", "x", "y"]})
+    data = categorical_eda_data(df, "unit")
+    assert data["labels"] == ["x", "y"]
+    assert data["counts"] == [2, 1]
+    assert data["pct"] == pytest.approx([200 / 3, 100 / 3])
+    json.dumps(data)
+
+
+def test_cat_vs_cat_data_matrix_matches_labels_orientation():
+    df = pd.DataFrame({"x": ["A", "A", "B"], "y": ["p", "q", "p"]})
+    data = cat_vs_cat_data(df, "x", "y", normalize=False)
+    assert data["x_labels"] == ["A", "B"]
+    assert data["y_labels"] == ["p", "q"]
+    # row=A: 1 p, 1 q; row=B: 1 p, 0 q
+    assert data["matrix"] == [[1.0, 1.0], [1.0, 0.0]]
+    json.dumps(data)
