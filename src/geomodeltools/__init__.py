@@ -16,15 +16,17 @@ from .colour import (
 )
 from .eda import cat_vs_cat, cat_vs_cat_data, categorical_eda, categorical_eda_data, category_summary, quick_eda, quick_eda_data
 from .contacts import (
+    contact_boxplot_bins,
     contact_composition,
     contact_plot,
     contact_profile,
     distance_to_contact,
+    plot_contact_boxplot,
     plot_contact_composition,
     plot_contact_profile,
 )
 from .report import build_report, write_html
-from .soft_boundary import plot_soft_boundary_boxplots, soft_boundary_values
+from .soft_boundary import plot_soft_boundary_boxplots, soft_boundary_pairs, soft_boundary_values
 
 __all__ = [
     "bufferize_2d_polygons",
@@ -49,12 +51,15 @@ __all__ = [
     "category_summary",
     "distance_to_contact",
     "contact_profile",
+    "contact_boxplot_bins",
     "contact_composition",
     "plot_contact_profile",
+    "plot_contact_boxplot",
     "plot_contact_composition",
     "contact_plot",
     "build_report",
     "write_html",
     "soft_boundary_values",
+    "soft_boundary_pairs",
     "plot_soft_boundary_boxplots",
 ]

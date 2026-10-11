@@ -148,6 +148,70 @@ def contact_profile(
     return pd.DataFrame({"mid": mids, agg: stat.to_numpy(dtype=float), "n": n.to_numpy()})
 
 
+def contact_boxplot_bins(
+    df: pd.DataFrame,
+    distance,
+    value: str,
+    bin_width: float | None = None,
+    n_bins: int = 10,
+) -> dict:
+    """Raw `value` samples grouped by distance-to-contact bin, for a literal box-per-bin
+    contact diagram (`Funciones_RAguirre.contact_boxplots`' style) rather than
+    `contact_profile`'s single mean/median line.
+
+    Same binning as `contact_profile`; see its docstring for `bin_width`/`n_bins`.
+
+    Returns:
+        `{"mid": [...], "values": [[...], ...]}`: one inner list of raw values per bin, in
+        `mid` order (empty bins included as empty lists).
+    """
+    d = _distance_series(df, distance)
+    v = df[value]
+    valid = d.notna() & v.notna()
+    d, v = d[valid], v[valid]
+    if d.empty:
+        raise ValueError("No rows with both a distance and a value to bin.")
+
+    bins = pd.cut(d, _bin_edges(d, bin_width, n_bins))
+    grouped = v.groupby(bins, observed=False)
+    values = []
+    for interval in bins.cat.categories:
+        try:
+            values.append(grouped.get_group(interval).tolist())
+        except KeyError:
+            values.append([])  # no samples in this bin
+    return {"mid": bins.cat.categories.mid.tolist(), "values": values}
+
+
+def plot_contact_boxplot(
+    df: pd.DataFrame,
+    distance,
+    value: str,
+    bin_width: float | None = None,
+    n_bins: int = 10,
+    ax=None,
+) -> Figure:
+    """Box-and-whisker plot of `value` per distance-to-contact bin: a literal box per bin
+    (`Funciones_RAguirre.contact_boxplots`' style), as opposed to `plot_contact_profile`'s
+    single mean/median line.
+    """
+    data = contact_boxplot_bins(df, distance, value, bin_width=bin_width, n_bins=n_bins)
+    mids = [mid for mid, vals in zip(data["mid"], data["values"]) if vals]
+    values = [vals for vals in data["values"] if vals]
+    if not values:
+        raise ValueError("Every distance bin is empty.")
+
+    fig, ax = _ensure_axes(ax)
+    width = float(np.diff(data["mid"]).mean()) if len(data["mid"]) > 1 else 1.0
+    ax.boxplot(values, positions=mids, widths=width * 0.7, showmeans=True)
+    ax.axvline(0, color="k", ls=":", lw=1.5)
+    ax.set_xlabel("Distance to contact")
+    ax.set_ylabel(value)
+    ax.set_title(f"{value}: contact box plot (n={sum(len(v) for v in values)})")
+    fig.tight_layout()
+    return fig
+
+
 def contact_composition(
     df: pd.DataFrame,
     distance,
@@ -257,6 +321,7 @@ def contact_plot(
     *,
     value: str | None = None,
     category: str | None = None,
+    kind: str = "profile",
     contact=None,
     bin_width: float | None = None,
     n_bins: int = 10,
@@ -266,20 +331,25 @@ def contact_plot(
 ) -> Figure:
     """Contact plot: how a numeric or categorical variable changes across a unit boundary.
 
-    One call that does `distance_to_contact` then either `plot_contact_profile` (pass
-    `value`, for a numeric column: a mean/median profile) or `plot_contact_composition`
-    (pass `category`, for a categorical column: a stacked percentage breakdown). Exactly
-    one of `value`/`category` must be given.
+    One call that does `distance_to_contact` then one of: `plot_contact_profile` (pass
+    `value`, `kind="profile"` (default): a mean/median line), `plot_contact_boxplot`
+    (pass `value`, `kind="boxplot"`: a literal box per distance bin), or
+    `plot_contact_composition` (pass `category`: a stacked percentage breakdown). Exactly
+    one of `value`/`category` must be given; `kind` only applies to `value`.
 
     `coords`, `unit`, `inside`, `outside`, `contact` are passed straight through to
-    `distance_to_contact`; `bin_width`, `n_bins`, `weight` (and `agg`, for a numeric
-    `value`) to the profile/composition function.
+    `distance_to_contact`; `bin_width`, `n_bins`, `weight` (and `agg`, for `kind="profile"`)
+    to the profile/boxplot/composition function.
     """
     if (value is None) == (category is None):
         raise ValueError("Pass exactly one of `value` (numeric) or `category` (categorical).")
+    if kind not in ("profile", "boxplot"):
+        raise ValueError(f"kind must be 'profile' or 'boxplot', got {kind!r}")
 
     distance = distance_to_contact(df, coords, unit, inside, outside, contact=contact)
 
     if value is not None:
+        if kind == "boxplot":
+            return plot_contact_boxplot(df, distance, value, bin_width=bin_width, n_bins=n_bins, ax=ax)
         return plot_contact_profile(df, distance, value, bin_width=bin_width, n_bins=n_bins, weight=weight, agg=agg, ax=ax)
     return plot_contact_composition(df, distance, category, bin_width=bin_width, n_bins=n_bins, weight=weight, ax=ax)

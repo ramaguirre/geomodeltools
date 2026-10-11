@@ -9,8 +9,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from geomodeltools import contact_composition, contact_plot, contact_profile, distance_to_contact
-from geomodeltools.contacts import plot_contact_composition, plot_contact_profile
+from geomodeltools import contact_boxplot_bins, contact_composition, contact_plot, contact_profile, distance_to_contact
+from geomodeltools.contacts import plot_contact_boxplot, plot_contact_composition, plot_contact_profile
 
 
 def _line_df():
@@ -47,6 +47,36 @@ def test_contact_profile_bins_and_averages_correctly():
     assert table["mid"].tolist() == pytest.approx([-4.5, -1.5, 1.5, 4.5])
     assert table["n"].tolist() == [2, 1, 2, 1]
     assert table["mean"].tolist() == pytest.approx([-2.5, -1.0, 1.5, 3.0])
+
+
+def test_contact_boxplot_bins_groups_raw_values_per_bin():
+    # Same bins as test_contact_profile_bins_and_averages_correctly, but the raw values
+    # behind each bin instead of its mean (Funciones_RAguirre.contact_boxplots' style:
+    # a literal box per bin, not a single mean/median line).
+    df = _line_df()
+    distance = distance_to_contact(df, ["x"], "unit", inside="A", outside="B")
+    data = contact_boxplot_bins(df, distance, "value", bin_width=3, n_bins=4)
+
+    assert data["mid"] == pytest.approx([-4.5, -1.5, 1.5, 4.5])
+    assert data["values"] == [[-3.0, -2.0], [-1.0], [1.0, 2.0], [3.0]]
+
+
+def test_plot_contact_boxplot_draws_one_box_per_non_empty_bin():
+    df = _line_df()
+    distance = distance_to_contact(df, ["x"], "unit", inside="A", outside="B")
+    fig = plot_contact_boxplot(df, distance, "value", bin_width=3, n_bins=4)
+    ax = fig.axes[0]
+    assert len(ax.get_lines()) > 0  # boxplot whiskers/medians were drawn
+    assert ax.get_xlabel() == "Distance to contact"
+
+
+def test_contact_plot_boxplot_kind_dispatches_to_plot_contact_boxplot():
+    df = _line_df()
+    fig = contact_plot(df, ["x"], "unit", "A", "B", value="value", kind="boxplot", bin_width=3, n_bins=4)
+    assert len(fig.axes[0].get_lines()) > 0
+
+    with pytest.raises(ValueError):
+        contact_plot(df, ["x"], "unit", "A", "B", value="value", kind="nonsense")
 
 
 def test_contact_composition_is_pure_on_each_side():

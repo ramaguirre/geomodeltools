@@ -1,19 +1,20 @@
-"""Soft-boundary (gradational contact) sample pooling and QC box plots.
+"""Soft-boundary (gradational contact) sample pooling and a matrix of contact box plots.
 
-A rewrite of `Funciones_RAguirre.Geostats_RA.soft_boundary_samples`, which stays as-is for
-reference. That function pools, per unit, its own samples plus any neighbour's samples
-that fall within a per-pair distance threshold of the contact (a "soft"/gradational
-boundary, as opposed to a hard one) into one merged column per unit — useful when a
-contact is known to be gradational and you want the neighbouring domain's near-boundary
-samples folded into statistics for the unit they are geologically part of.
+`soft_boundary_values` is a rewrite of `Funciones_RAguirre.Geostats_RA.soft_boundary_samples`,
+which stays as-is for reference. That function pools, per unit, its own samples plus any
+neighbour's samples that fall within a per-pair distance threshold of the contact (a
+"soft"/gradational boundary, as opposed to a hard one) into one merged column per unit.
+This keeps the "hard" (strict within-unit) and "soft" (boundary-pooled) populations
+separate, along with each contributing neighbour's own pooled-in slice, and reuses
+`contacts.distance_to_contact` rather than a second implementation of the distance
+calculation.
 
-`soft_boundary_values` reuses `contacts.distance_to_contact` for the actual distance
-calculation (no second implementation of it) and, unlike the original, keeps the "hard"
-(strict within-unit) and "soft" (boundary-pooled) populations separate, along with each
-contributing neighbour's own pooled-in slice, so they can be compared. No box-plot
-companion to `soft_boundary_samples` exists in the reference code, so the panel layout in
-`plot_soft_boundary_boxplots` (one subplot per target unit, in the soft-boundary matrix's
-own column order) is a judgment call, not a port.
+`plot_soft_boundary_boxplots` is the "matrix of box plots": one panel per positive-threshold
+(neighbor, target) pair in the same matrix, each a literal box-per-distance-bin contact
+diagram (`Funciones_RAguirre.contact_boxplots`'s style, via `contacts.plot_contact_boxplot`)
+out to that pair's own threshold distance. An earlier version of this panel compared the
+hard/soft/neighbour *populations* as three plain boxes per unit; `contact_boxplots` is the
+box-plot style actually referenced for "matrix of box plots", so this now matches it.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
 
-from .contacts import distance_to_contact
+from .contacts import distance_to_contact, plot_contact_boxplot
 
 
 def soft_boundary_values(
@@ -32,7 +33,8 @@ def soft_boundary_values(
     unit: str,
     soft_boundary_matrix: pd.DataFrame,
 ) -> dict:
-    """The hard/soft populations behind the soft-boundary box plots, as JSON-ready data.
+    """The hard/soft pooled populations, as JSON-ready data (`soft_boundary_samples`'s
+    merged-column result, split apart).
 
     `soft_boundary_matrix.loc[neighbor, target]` is the distance threshold (same units as
     `coords`) within which `neighbor`'s samples are pooled into `target`'s "soft"
@@ -73,62 +75,59 @@ def soft_boundary_values(
     return result
 
 
+def soft_boundary_pairs(soft_boundary_matrix: pd.DataFrame) -> list[tuple[str, str, float]]:
+    """`(neighbor, target, threshold)` for every positive, off-diagonal entry of
+    `soft_boundary_matrix` (row=neighbor, column=target — see `soft_boundary_values`)."""
+    pairs = []
+    for target in soft_boundary_matrix.columns:
+        thresholds = soft_boundary_matrix[target]
+        for neighbor, threshold in thresholds.items():
+            if neighbor != target and pd.notna(threshold) and threshold > 0:
+                pairs.append((neighbor, target, float(threshold)))
+    return pairs
+
+
 def plot_soft_boundary_boxplots(
     df: pd.DataFrame,
     coords: list[str],
     value: str,
     unit: str,
     soft_boundary_matrix: pd.DataFrame,
-    log: bool = False,
+    n_bins: int = 10,
     ncols: int | None = None,
     figsize: tuple[float, float] | None = None,
 ) -> Figure:
-    """Matrix of box plots: per target unit, "hard" vs. "soft" (boundary-pooled) `value`.
+    """Matrix of contact box plots: one panel per positive-threshold (neighbor, target)
+    pair in `soft_boundary_matrix`.
 
-    One panel per column of `soft_boundary_matrix` (its own order), each a box plot of
-    that unit's `hard` and `soft` populations (see `soft_boundary_values`) plus one box
-    per contributing neighbour's own pooled-in slice, so you can see both the overall
-    effect of pooling and which neighbour is driving it.
+    Each panel is a literal box-and-whisker-per-distance-bin diagram of `value` across
+    that pair's contact (`contacts.plot_contact_boxplot`, i.e. `Funciones_RAguirre.
+    contact_boxplots`'s style), spanning the pair's own soft-boundary distance threshold
+    (`bin_width = 2 * threshold / n_bins`, so the bins cover exactly +/- threshold).
 
     Parameters:
-        log: log10-scale the value axis in every panel.
-        ncols: panels per row. Defaults to `ceil(sqrt(n_targets))`.
+        n_bins: bins per panel, split evenly either side of the contact.
+        ncols: panels per row. Defaults to `ceil(sqrt(n_pairs))`.
         figsize: passed to `plt.subplots`; a sensible default is picked otherwise.
     """
     import matplotlib.pyplot as plt
-    from matplotlib.ticker import FuncFormatter
 
-    data = soft_boundary_values(df, coords, value, unit, soft_boundary_matrix)
-    targets = list(data.keys())
-    if not targets:
-        raise ValueError("`soft_boundary_matrix` has no columns.")
+    pairs = soft_boundary_pairs(soft_boundary_matrix)
+    if not pairs:
+        raise ValueError("No positive threshold in `soft_boundary_matrix`.")
 
-    ncols = ncols or int(np.ceil(np.sqrt(len(targets))))
-    nrows = int(np.ceil(len(targets) / ncols))
+    ncols = ncols or int(np.ceil(np.sqrt(len(pairs))))
+    nrows = int(np.ceil(len(pairs) / ncols))
     fig, axes = plt.subplots(nrows, ncols, figsize=figsize or (4.5 * ncols, 4 * nrows), squeeze=False)
 
-    for ax, target in zip(axes.flat, targets):
-        record = data[target]
-        labels = ["hard", "soft"] + list(record["neighbors"])
-        series = [record["hard"], record["soft"]] + list(record["neighbors"].values())
-        labels = [label for label, s in zip(labels, series) if len(s)]
-        series = [s for s in series if len(s)]
-        if log:
-            series = [np.log10(s) for s in series]
-        ax.boxplot(series, showmeans=True)  # positions boxes at 1..len(series) regardless of matplotlib version
-        ax.set_xticks(range(1, len(labels) + 1))
-        ax.set_xticklabels(labels)
-        if log:
-            ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _pos: f"{10**x:g}"))
-        ax.set_title(target)
-        ax.set_ylabel(value)
-        for label in ax.get_xticklabels():
-            label.set_rotation(30)
-            label.set_ha("right")
+    for ax, (neighbor, target, threshold) in zip(axes.flat, pairs):
+        distance = distance_to_contact(df, coords, unit, inside=target, outside=neighbor)
+        plot_contact_boxplot(df, distance, value, bin_width=2 * threshold / n_bins, n_bins=n_bins, ax=ax)
+        ax.set_title(f"{neighbor} / {target}")
 
-    for ax in axes.flat[len(targets) :]:
+    for ax in axes.flat[len(pairs) :]:
         ax.set_visible(False)
 
-    fig.suptitle(f"{value}: soft-boundary pooling by {unit}")
+    fig.suptitle(f"{value}: soft-boundary contact box plots by {unit}")
     fig.tight_layout()
     return fig

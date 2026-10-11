@@ -141,10 +141,12 @@ fig = categorical_eda(df, category="alteration")
 fig = cat_vs_cat(df, category_x="lithology", category_y="alteration")
 
 # Contact plot: how cu_pct (or, with category=..., a categorical column) changes with
-# distance from the boundary between two units
+# distance from the boundary between two units. kind="profile" (default) draws a single
+# mean/median line; kind="boxplot" draws a literal box per distance bin instead
+# (Funciones_RAguirre.contact_boxplots' style).
 fig = contact_plot(
     df, coords=["x", "y", "z"], unit="lithology",
-    inside="Sulfide", outside="Waste", value="cu_pct",
+    inside="Sulfide", outside="Waste", value="cu_pct", kind="boxplot",
 )
 ```
 
@@ -171,30 +173,34 @@ The CoV panel in `quick_eda` is a scatter of std vs. mean, one labelled point pe
 category — points on the same line through the origin share a coefficient of variation —
 matching `Plotting_Functions_RAguirre.var_coeff`, not a bar chart of `std / mean`.
 
-## Soft-boundary (gradational contact) box plots
+## Soft-boundary (gradational contact) matrix of box plots
 
-For a contact known to be gradational rather than sharp: pool each unit's own samples
-with its neighbours' samples that fall within a per-pair distance of the contact, and
-compare the "hard" (strict within-unit) and "soft" (boundary-pooled) distributions.
+For a contact known to be gradational rather than sharp: a matrix of contact box plots
+(`Funciones_RAguirre.contact_boxplots`' style — a literal box per distance bin, see above),
+one panel per unit pair, each spanning that pair's own "how far is the gradation" distance.
 
 ```python
 import pandas as pd
 from geomodeltools import plot_soft_boundary_boxplots
 
-# matrix.loc[neighbor, target] = pooling distance (m); 0/missing = no pooling
+# matrix.loc[neighbor, target] = how far the gradation extends (m); 0/missing = no panel
 matrix = pd.DataFrame(0.0, index=["Sulfide", "Waste"], columns=["Sulfide", "Waste"])
-matrix.loc["Waste", "Sulfide"] = 5.0   # Waste samples within 5 m of the contact pool into Sulfide
-matrix.loc["Sulfide", "Waste"] = 5.0   # and vice versa
+matrix.loc["Waste", "Sulfide"] = 15.0   # Sulfide's panel spans +/-15 m across the contact
+matrix.loc["Sulfide", "Waste"] = 20.0   # Waste's panel spans +/-20 m
 
 fig = plot_soft_boundary_boxplots(df, coords=["x", "y", "z"], value="cu_pct", unit="lithology",
-                                   soft_boundary_matrix=matrix, log=True)
+                                   soft_boundary_matrix=matrix, n_bins=8)
 ```
 
-One panel per target unit (a column of `soft_boundary_matrix`), each a box plot of that
-unit's `hard` and `soft` populations plus one box per contributing neighbour's own
-pooled-in slice, so you can see both the overall effect of pooling and which neighbour is
-driving it. `soft_boundary_values` returns the same data as plain Python lists, if you
-want the numbers without the figure.
+This is also useful on its own as `contact_plot(..., kind="boxplot")` for a single pair,
+without a matrix.
+
+`soft_boundary_values` is a separate, lower-level function: the per-unit "hard"
+(strict within-unit) vs. "soft" (neighbours within `soft_boundary_matrix`'s threshold
+pooled in) populations, generalising `Geostats_RA.soft_boundary_samples`'s merged-column
+result (reusing this package's own `distance_to_contact`, not a second distance
+implementation) with "hard"/"soft"/each neighbour's own slice kept separate instead of
+merged into one column.
 
 This generalises `Funciones_RAguirre.Geostats_RA.soft_boundary_samples` (same pooling
 rule, via this package's own `distance_to_contact`) with "hard" and "soft" kept separate
