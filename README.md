@@ -116,3 +116,16 @@ repeats values.
 By default, `add_z_from_opentopography` assumes PSAD56 / UTM zone 19S
 (EPSG:24879) for inputs with no CRS set, and writes the DEM GeoTIFF in that
 same CRS. Pass `crs=...` to target a different UTM zone or datum.
+
+## Basin base surfaces (`geomodeltools.basin`)
+
+Builds, outside the modelling software, the base surface of a sedimentary basin (or a network of thin river-bed
+polygons) from a polygon and a DEM. Surfaces only: no booleans, no solids. Install the extra with
+`pip install geomodeltools[basin]` (needs scipy, triangle, matplotlib); import it as `from geomodeltools import basin`.
+
+The base is the DEM minus `z_max * (1 - exp(-d / L))` inside the polygon (`d` = distance to the ring, so the basin
+meets the topography exactly on its edge) and above the DEM outside it (`h_min * smoothstep + h_slope * |d|`), so it
+works as a cutter in a chronology. Top and base share one graded constrained Delaunay triangulation of the whole box.
+`build_basin_surface(...)` writes PLY (local frame), OBJ (real coordinates), a frame JSON, a QA JSON and a transects plot,
+and prints QA: degenerate/flipped triangles, angle stats, `|Z_base - Z_top|` on the ring, inside/outside sign checks and
+the basin volume.

@@ -1,0 +1,411 @@
+"""Base surface of a sedimentary basin from a polygon draped over a DEM (surfaces only, no solids).
+
+The base surface Z_base(x, y) is continuous over the whole bounding box:
+
+* inside the polygon (signed distance d >= 0):  Z_base = Z_top - z_max * (1 - exp(-d / L))
+  (a floor that is 0 m deep on the edge and saturates towards z_max);
+* outside (d < 0):  Z_base = Z_top + h(|d|),  h = h_min * smoothstep(|d| / w) + h_slope * |d|
+  so the base lies strictly above the topography and meets it exactly on the ring.
+
+Top and base share ONE constrained Delaunay triangulation of the bounding box (constraints: the polygon rings and the
+box edges), graded from `edge_spacing` at the rings to coarser towards the box edge, so vertices correspond one to one.
+
+Modules, in the order they are used: `prepare` (frame, validity, densify), `distance` (signed distance field),
+`elevation` (Z_top, Z_base), `meshing` (graded triangulation), `qa` (checks, transects, volume), `build` (all of it).
+Everything works in a local metric frame (origin subtracted) to keep float precision; the origin is returned.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+import numpy as np
+
+# ----------------------------------------------------------------------------------------------------------
+# parameters (all lengths in metres, slopes in m/m)
+# ----------------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class BasinParams:
+    z_max: float = 60.0           # maximum basin depth
+    L: float = 150.0              # saturation length of the depth profile
+    edge_spacing: float = 40.0    # target triangle edge on the polygon ring
+    h_slope: float = 0.20         # slope of the ramp outside the polygon
+    h_min: float = 5.0            # minimum offset above the topography just outside
+    ramp_width: float = 100.0     # w: distance over which h_min is reached
+    smooth_cells: float = 3.0     # sigma (grid cells) of the Gaussian smoothing of d inside the polygon
+    grid_cell: float = 20.0       # cell of the distance-field grid
+    grow: float = 0.15            # mesh size grows by this per metre of distance from the ring
+    max_edge: float = 1500.0      # largest triangle edge at the box boundary
+    refine_passes: int = 3
+    box_edge_spacing: float | None = None   # spacing of the points put on the box edge (default: max_edge)
+
+
+# ----------------------------------------------------------------------------------------------------------
+# 1. prepare: metric frame, valid polygon, densified ring
+# ----------------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class Frame:
+    crs: str
+    origin: tuple[float, float, float]   # x0, y0, z0 subtracted from every coordinate
+
+    def to_json(self) -> str:
+        return json.dumps({"crs": self.crs, "origin": list(self.origin)})
+
+
+def prepare(polygons, crs, bbox, spacing, z0: float = 0.0):
+    """Reproject to a metric CRS if needed, repair validity, merge, densify, shift to a local origin.
+
+    `polygons`: shapely geometry or iterable of them, in `crs`. `bbox`: (xmin, xmax, ymin, ymax) in `crs` (already
+    metric) or in the polygon CRS if that is geographic (then it is reprojected too).
+    Returns (polygon_local, bbox_local, Frame).
+    """
+    import pyproj
+    import shapely
+    from shapely.ops import unary_union
+
+    geoms = [polygons] if hasattr(polygons, "geom_type") else list(polygons)
+    src = pyproj.CRS.from_user_input(crs)
+    if src.is_geographic:
+        raise ValueError("Give the polygons and the box in a metric CRS (UTM); geographic input is not reprojected here.")
+    xmin, xmax, ymin, ymax = bbox
+    box = shapely.box(xmin, ymin, xmax, ymax)
+    union = shapely.buffer(unary_union([g if g.is_valid else shapely.make_valid(g) for g in geoms]), 0)
+    inner = shapely.box(xmin + 2 * spacing, ymin + 2 * spacing, xmax - 2 * spacing, ymax - 2 * spacing)
+    kept = union.intersection(inner)
+    if kept.is_empty:
+        raise ValueError("The polygon does not intersect the box.")
+    if kept.area < union.area * (1 - 1e-9):
+        print(f"warning: {100 * (1 - kept.area / union.area):.2f}% of the polygon area lies within two edge spacings of the "
+              "box edge or outside it and was cut off; use a larger box")
+    union = shapely.segmentize(kept, spacing)
+    x0, y0 = (xmin + xmax) / 2.0, (ymin + ymax) / 2.0
+    local = shapely.transform(union, lambda c: c - np.array([x0, y0]))
+    bbox_local = (xmin - x0, xmax - x0, ymin - y0, ymax - y0)
+    return local, bbox_local, Frame(crs=src.to_string(), origin=(x0, y0, z0))
+
+
+# ----------------------------------------------------------------------------------------------------------
+# 2. signed distance field (d > 0 inside, < 0 outside, 0 on the ring)
+# ----------------------------------------------------------------------------------------------------------
+
+
+class DistanceField:
+    """Signed distance on a grid (for sampling everywhere) plus exact distances near the ring (for the vertices)."""
+
+    def __init__(self, polygon, bbox, params: BasinParams):
+        import shapely
+        from rasterio import features
+        from rasterio.transform import from_origin
+        from scipy import ndimage
+
+        self.polygon, self.bbox, self.p = polygon, bbox, params
+        xmin, xmax, ymin, ymax = bbox
+        c = params.grid_cell
+        self.nx, self.ny = int(np.ceil((xmax - xmin) / c)) + 1, int(np.ceil((ymax - ymin) / c)) + 1
+        self.x0, self.y0, self.c = xmin, ymin, c
+        transform = from_origin(xmin - c / 2, ymin + (self.ny - 0.5) * c, c, c)   # row 0 = northmost
+        inside = features.rasterize([(polygon, 1)], out_shape=(self.ny, self.nx), transform=transform, fill=0,
+                                    dtype="uint8", all_touched=False).astype(bool)[::-1]   # row 0 = south
+        d_in = ndimage.distance_transform_edt(inside) - 0.5
+        d_out = ndimage.distance_transform_edt(~inside) - 0.5
+        d = np.where(inside, d_in, -d_out) * c
+        d_smooth = ndimage.gaussian_filter(np.where(d > 0, d, 0.0), params.smooth_cells)
+        f = np.clip(d / (3 * c), 0.0, 1.0)                 # 0 at the ring: exact there; smooth from 3 cells in
+        self.grid = np.where(d > 0, (1 - f) * d + f * d_smooth, d)
+        self.boundary = polygon.boundary
+        segs = []
+        for ring in _rings(polygon):
+            xy = np.asarray(ring.coords)
+            segs += [shapely.linestrings(xy[i:i + 2]) for i in range(len(xy) - 1)]
+        self.tree = shapely.STRtree(segs)
+        self.near = 3.0 * c
+
+    def sample_grid(self, x, y):
+        from scipy import ndimage
+        return ndimage.map_coordinates(self.grid, [(np.asarray(y) - self.y0) / self.c, (np.asarray(x) - self.x0) / self.c],
+                                       order=1, mode="nearest")
+
+    def at(self, x, y):
+        """Signed distance at points: grid value, replaced by the exact distance where closer than 3 cells to the ring."""
+        import shapely
+        x, y = np.atleast_1d(np.asarray(x, float)), np.atleast_1d(np.asarray(y, float))
+        d = self.sample_grid(x, y)
+        close = np.abs(d) < self.near
+        if close.any():
+            pts = shapely.points(x[close], y[close])
+            idx, dist = self.tree.query_nearest(pts, return_distance=True, all_matches=False)
+            exact = np.empty(len(pts))
+            exact[idx[0]] = dist
+            inside = shapely.contains_xy(self.polygon, x[close], y[close])
+            exact = np.where(inside, exact, -exact)
+            exact = np.where(np.abs(exact) < 1e-6, 0.0, exact)
+            f = np.clip(exact / self.near, 0.0, 1.0)
+            smooth = d[close]
+            d[close] = np.where(exact > 0, (1 - f) * exact + f * smooth, exact)
+        return d
+
+
+def _rings(polygon):
+    geoms = polygon.geoms if hasattr(polygon, "geoms") else [polygon]
+    for g in geoms:
+        yield g.exterior
+        yield from g.interiors
+
+
+# ----------------------------------------------------------------------------------------------------------
+# 3. elevation functions
+# ----------------------------------------------------------------------------------------------------------
+
+
+def smoothstep(t):
+    t = np.clip(t, 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+class Dem:
+    """Bilinear DEM sampler in the local frame (extends the edge value outside the raster, and counts how often)."""
+
+    def __init__(self, path, frame: Frame):
+        import rasterio
+
+        with rasterio.open(path) as src:
+            self.z = src.read(1).astype(float)
+            self.transform, self.nodata = src.transform, src.nodata
+            self.crs = src.crs
+        if self.nodata is not None:
+            self.z[self.z == self.nodata] = np.nan
+        self.frame, self.outside = frame, 0
+        if np.isnan(self.z).any():
+            from scipy import ndimage
+            idx = ndimage.distance_transform_edt(np.isnan(self.z), return_distances=False, return_indices=True)
+            self.z = self.z[tuple(idx)]
+            self.filled = True
+        else:
+            self.filled = False
+
+    def __call__(self, x, y):
+        from scipy import ndimage
+
+        x0, y0, z0 = self.frame.origin
+        inv = ~self.transform
+        xw, yw = np.asarray(x) + x0, np.asarray(y) + y0
+        col, row = inv.a * xw + inv.b * yw + inv.c, inv.d * xw + inv.e * yw + inv.f
+        col, row = col - 0.5, row - 0.5                       # pixel centres
+        h, w = self.z.shape
+        self.outside += int(((col < 0) | (col > w - 1) | (row < 0) | (row > h - 1)).sum())
+        return ndimage.map_coordinates(self.z, [row, col], order=1, mode="nearest") - z0
+
+
+def z_base(z_top, d, p: BasinParams):
+    """Base elevation from the top elevation and the signed distance (vectorised)."""
+    d = np.asarray(d, float)
+    inside = d >= 0
+    depth = p.z_max * (1.0 - np.exp(-np.where(inside, d, 0.0) / p.L))
+    ahead = np.abs(np.where(inside, 0.0, d))
+    h = p.h_min * smoothstep(ahead / p.ramp_width) + p.h_slope * ahead
+    return np.where(inside, z_top - depth, z_top + h)
+
+
+# ----------------------------------------------------------------------------------------------------------
+# 4. meshing: one graded constrained Delaunay triangulation of the box
+# ----------------------------------------------------------------------------------------------------------
+
+
+def _pslg(polygon, bbox, box_spacing):
+    xmin, xmax, ymin, ymax = bbox
+    verts, segs = [], []
+
+    def add_ring(xy):
+        xy = np.asarray(xy)[:-1]
+        base = len(verts)
+        verts.extend(map(tuple, xy))
+        n = len(xy)
+        segs.extend((base + i, base + (i + 1) % n) for i in range(n))
+
+    for ring in _rings(polygon):
+        add_ring(ring.coords)
+    nx = max(1, int(np.ceil((xmax - xmin) / box_spacing)))
+    ny = max(1, int(np.ceil((ymax - ymin) / box_spacing)))
+    pts = ([(x, ymin) for x in np.linspace(xmin, xmax, nx + 1)[:-1]] + [(xmax, y) for y in np.linspace(ymin, ymax, ny + 1)[:-1]]
+           + [(x, ymax) for x in np.linspace(xmax, xmin, nx + 1)[:-1]] + [(xmin, y) for y in np.linspace(ymax, ymin, ny + 1)[:-1]])
+    base = len(verts)
+    verts.extend(pts)
+    segs.extend((base + i, base + (i + 1) % len(pts)) for i in range(len(pts)))
+    return np.asarray(verts, float), np.asarray(segs, int)
+
+
+def mesh(polygon, bbox, field: DistanceField, p: BasinParams):
+    """Graded constrained Delaunay triangulation (triangle 'pq30', refined with a size field of |d|)."""
+    import triangle as tr
+
+    v, s = _pslg(polygon, bbox, p.box_edge_spacing or p.max_edge)
+    t = tr.triangulate({"vertices": v, "segments": s}, "pq30")
+    for _ in range(p.refine_passes):
+        tri = t["triangles"]
+        cen = t["vertices"][tri].mean(axis=1)
+        d = np.abs(field.sample_grid(cen[:, 0], cen[:, 1]))
+        h = np.clip(p.edge_spacing + p.grow * d, p.edge_spacing, p.max_edge)
+        t["triangle_max_area"] = (np.sqrt(3.0) / 4.0) * h * h
+        t = tr.triangulate(t, "rpq30a")
+    return t["vertices"], t["triangles"]
+
+
+# ----------------------------------------------------------------------------------------------------------
+# 5. QA
+# ----------------------------------------------------------------------------------------------------------
+
+
+def triangle_quality(v, f):
+    a, b, c = v[f[:, 0]], v[f[:, 1]], v[f[:, 2]]
+    area2 = (b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0])
+    e = np.stack([np.linalg.norm(b - c, axis=1), np.linalg.norm(c - a, axis=1), np.linalg.norm(a - b, axis=1)], axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cosA = np.stack([(e[:, 1] ** 2 + e[:, 2] ** 2 - e[:, 0] ** 2) / (2 * e[:, 1] * e[:, 2]),
+                         (e[:, 0] ** 2 + e[:, 2] ** 2 - e[:, 1] ** 2) / (2 * e[:, 0] * e[:, 2]),
+                         (e[:, 0] ** 2 + e[:, 1] ** 2 - e[:, 2] ** 2) / (2 * e[:, 0] * e[:, 1])], axis=1)
+    ang = np.degrees(np.arccos(np.clip(cosA, -1, 1)))
+    aspect = e.max(axis=1) ** 2 / np.maximum(np.abs(area2), 1e-12)    # longest edge / height on that edge
+    return area2 / 2.0, ang.min(axis=1), aspect
+
+
+def qa(v, f, z_t, z_b, d, polygon, field, p: BasinParams, out_dir: Path | None = None, name="basin", verbose=True,
+       z_offset: float = 0.0):
+    """Checks required of the surfaces. Returns a dict of numbers and booleans; prints them and saves transects."""
+    import shapely
+
+    area, min_ang, aspect = triangle_quality(v, f)
+    ring = np.abs(d) < 1e-6
+    depth = z_t - z_b
+    res = {
+        "n_vertices": int(len(v)), "n_triangles": int(len(f)),
+        "degenerate_triangles": int((np.abs(area) < 1e-9).sum()),
+        "flipped_triangles": int((area < 0).sum()),
+        "min_angle_deg": {"min": float(min_ang.min()), "p1": float(np.percentile(min_ang, 1)), "median": float(np.median(min_ang))},
+        "aspect_ratio": {"max": float(aspect.max()), "p99": float(np.percentile(aspect, 99)), "median": float(np.median(aspect))},
+        "ring_vertices": int(ring.sum()),
+        "ring_max_abs_dz": float(np.abs(depth[ring]).max()) if ring.any() else None,
+        "inside_base_below_top": bool((depth[d > 1e-6] > 0).all()) if (d > 1e-6).any() else True,
+        "outside_base_above_top": bool((depth[d < -1e-6] < 0).all()) if (d < -1e-6).any() else True,
+    }
+    cen = v[f].mean(axis=1)
+    inside = shapely.contains_xy(polygon, cen[:, 0], cen[:, 1])
+    mean_depth = depth[f].mean(axis=1)
+    res["basin_volume_m3"] = float((area[inside] * mean_depth[inside]).sum())
+    res["polygon_area_m2"] = float(area[inside].sum())
+    res["mean_depth_m"] = res["basin_volume_m3"] / res["polygon_area_m2"] if res["polygon_area_m2"] else 0.0
+    if verbose:
+        print(json.dumps(res, indent=2))
+    if out_dir is not None:
+        transects(v, f, z_t, z_b, polygon, field, p, Path(out_dir) / f"{name}_transects.png", z_offset=z_offset)
+    return res
+
+
+def transects(v, f, z_t, z_b, polygon, field, p: BasinParams, path: Path, n=3, z_offset: float = 0.0):
+    """Three transects through the polygon: mesh Z_top and Z_base against the analytic base z_top - z_max*(1-exp(-d/L))."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.tri as mtri
+    import shapely
+
+    interp_t = mtri.LinearTriInterpolator(mtri.Triangulation(v[:, 0], v[:, 1], f), z_t)
+    interp_b = mtri.LinearTriInterpolator(mtri.Triangulation(v[:, 0], v[:, 1], f), z_b)
+    big = max(polygon.geoms, key=lambda g: g.area) if hasattr(polygon, "geoms") else polygon
+    cx, cy = big.centroid.x, big.centroid.y
+    half = min(float(v[:, 0].max() - v[:, 0].min()), float(v[:, 1].max() - v[:, 1].min())) / 2.0
+    fig, axes = plt.subplots(n, 1, figsize=(10, 3.2 * n), sharey=False)
+    for ax, ang in zip(np.atleast_1d(axes), np.linspace(0, 180, n, endpoint=False)):
+        s = np.linspace(-half, half, 1200)
+        x, y = cx + s * np.cos(np.radians(ang)), cy + s * np.sin(np.radians(ang))
+        ok = (x >= v[:, 0].min()) & (x <= v[:, 0].max()) & (y >= v[:, 1].min()) & (y <= v[:, 1].max())
+        s, x, y = s[ok], x[ok], y[ok]
+        zt, zb = np.ma.filled(interp_t(x, y), np.nan), np.ma.filled(interp_b(x, y), np.nan)
+        d = field.at(x, y)
+        analytic = z_base(zt, d, p) + z_offset
+        zt, zb = zt + z_offset, zb + z_offset
+        ax.plot(s, zt, color="#7a6a4f", lw=1.2, label="Z_top (mesh)")
+        ax.plot(s, zb, color="#1f5aa6", lw=1.4, label="Z_base (mesh)")
+        ax.plot(s, analytic, "--", color="#d1495b", lw=1.0, label="Z_base analytic: z_top - z_max(1-exp(-d/L))")
+        ax.fill_between(s, zb, zt, where=(d > 0), color="#1f5aa6", alpha=0.15)
+        ax.set_title(f"transect at {ang:.0f} deg through the largest polygon", fontsize=9)
+        ax.set_xlabel("distance along transect (m)"); ax.set_ylabel("elevation (m a.s.l.)")
+        ax.legend(fontsize=7, loc="best")
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
+# ----------------------------------------------------------------------------------------------------------
+# 6. everything
+# ----------------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class BasinResult:
+    vertices: np.ndarray        # local frame, top surface (x, y, z_top)
+    faces: np.ndarray
+    z_top: np.ndarray
+    z_base: np.ndarray
+    d: np.ndarray
+    frame: Frame
+    params: BasinParams
+    qa: dict = field(default_factory=dict)
+
+    def surface(self, which: str, real_coords: bool = False) -> np.ndarray:
+        z = self.z_top if which == "top" else self.z_base
+        xyz = np.column_stack([self.vertices[:, 0], self.vertices[:, 1], z])
+        if real_coords:
+            xyz = xyz + np.asarray(self.frame.origin)
+        return xyz
+
+
+def write_mesh(path, xyz, faces):
+    """ASCII PLY or OBJ (by extension). Coordinates with 4 decimals; faces counter-clockwise seen from above."""
+    path = Path(path)
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        if path.suffix.lower() == ".ply":
+            fh.write(f"ply\nformat ascii 1.0\nelement vertex {len(xyz)}\nproperty double x\nproperty double y\nproperty double z\n"
+                     f"element face {len(faces)}\nproperty list uchar int vertex_indices\nend_header\n")
+            np.savetxt(fh, xyz, fmt="%.4f")
+            np.savetxt(fh, np.column_stack([np.full(len(faces), 3), faces]), fmt="%d")
+        else:
+            np.savetxt(fh, xyz, fmt="v %.4f %.4f %.4f")
+            np.savetxt(fh, faces + 1, fmt="f %d %d %d")
+
+
+def build_basin_surface(polygons, crs, dem_path, bbox, params: BasinParams | None = None, out_dir=None, name="basin",
+                        verbose=True) -> BasinResult:
+    """Polygon + DEM + box -> top and base surfaces on one triangulation. See the module docstring."""
+    p = params or BasinParams()
+    out = Path(out_dir) if out_dir else None
+    if out:
+        out.mkdir(parents=True, exist_ok=True)
+    local, bbox_l, frame = prepare(polygons, crs, bbox, p.edge_spacing)
+    # local z origin: the mean elevation inside the box, so heights are small too
+    dem0 = Dem(dem_path, Frame(frame.crs, frame.origin))
+    xs, ys = np.meshgrid(np.linspace(bbox_l[0], bbox_l[1], 25), np.linspace(bbox_l[2], bbox_l[3], 25))
+    z0 = float(np.round(np.mean(dem0(xs.ravel(), ys.ravel())), 0))
+    frame = Frame(frame.crs, (frame.origin[0], frame.origin[1], z0))
+    dem = Dem(dem_path, frame)
+    field = DistanceField(local, bbox_l, p)
+    v, f = mesh(local, bbox_l, field, p)
+    d = field.at(v[:, 0], v[:, 1])
+    zt = dem(v[:, 0], v[:, 1])
+    zb = z_base(zt, d, p)
+    res = BasinResult(vertices=v, faces=f, z_top=zt, z_base=zb, d=d, frame=frame, params=p)
+    if dem.outside and verbose:
+        print(f"note: {dem.outside} vertex lookups fell outside the DEM (edge values were used)")
+    res.qa = qa(v, f, zt, zb, d, local, field, p, out_dir=out, name=name, verbose=verbose, z_offset=frame.origin[2])
+    if out:
+        for which in ("top", "base"):
+            write_mesh(out / f"{name}_{which}_local.ply", res.surface(which), f)
+            write_mesh(out / f"{name}_{which}.obj", res.surface(which, real_coords=True), f)
+        (out / f"{name}_frame.json").write_text(res.frame.to_json(), encoding="utf-8")
+        (out / f"{name}_params_qa.json").write_text(json.dumps({"params": asdict(p), "qa": res.qa}, indent=2), encoding="utf-8")
+    return res

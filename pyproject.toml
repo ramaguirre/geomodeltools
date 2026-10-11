@@ -23,7 +23,8 @@ dependencies = [
 
 [project.optional-dependencies]
 viz = ["pyvista>=0.43"]
-dev = ["pytest>=7"]
+basin = ["scipy>=1.10", "triangle>=20230923", "matplotlib>=3.7"]
+dev = ["pytest>=7", "scipy>=1.10", "triangle>=20230923", "matplotlib>=3.7"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
