@@ -24,6 +24,7 @@ from .contacts import (
     plot_contact_profile,
 )
 from .report import build_report, write_html
+from .soft_boundary import plot_soft_boundary_boxplots, soft_boundary_values
 
 __all__ = [
     "bufferize_2d_polygons",
@@ -54,4 +55,6 @@ __all__ = [
     "contact_plot",
     "build_report",
     "write_html",
+    "soft_boundary_values",
+    "plot_soft_boundary_boxplots",
 ]

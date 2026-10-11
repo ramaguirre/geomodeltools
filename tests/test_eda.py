@@ -52,6 +52,21 @@ def test_quick_eda_with_category_orders_panels_by_median():
     fig = quick_eda(df, "value", category="unit")
     assert len(fig.axes) == 3
 
+
+def test_quick_eda_cov_panel_is_a_labelled_std_vs_mean_scatter_like_var_coeff():
+    # Funciones_RAguirre.Plotting_Functions_RAguirre.var_coeff plots std (y) vs mean (x),
+    # one point per category labelled with its name -- not a bar chart of std/mean.
+    df = pd.DataFrame({"value": [1.0, 2.0, 10.0, 14.0], "unit": ["lo", "lo", "hi", "hi"]})
+    fig = quick_eda(df, "value", category="unit")
+    cov_ax = fig.axes[2]
+
+    assert len(cov_ax.patches) == 0  # no bars
+    assert len(cov_ax.collections) == 1  # one scatter series
+    offsets = cov_ax.collections[0].get_offsets()
+    assert sorted(offsets[:, 0].tolist()) == pytest.approx([1.5, 12.0])  # x = mean per category
+    assert sorted(offsets[:, 1].tolist()) == pytest.approx([0.5, 2.0])  # y = std per category
+    assert {t.get_text() for t in cov_ax.texts} == {"lo", "hi"}  # category-name labels
+
     violin_ax = fig.axes[1]
     labels = [t.get_text() for t in violin_ax.get_xticklabels()]
     assert labels == ["lo", "hi"]  # median(lo)=1.5 < median(hi)=10.5

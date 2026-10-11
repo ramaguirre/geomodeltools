@@ -167,6 +167,42 @@ rewritten here with no Jupyter/seaborn dependency and a `scipy.spatial.cKDTree` 
 calculation in place of the original's batched `cdist` loop. That repo is unchanged and
 stays the reference implementation.
 
+The CoV panel in `quick_eda` is a scatter of std vs. mean, one labelled point per
+category — points on the same line through the origin share a coefficient of variation —
+matching `Plotting_Functions_RAguirre.var_coeff`, not a bar chart of `std / mean`.
+
+## Soft-boundary (gradational contact) box plots
+
+For a contact known to be gradational rather than sharp: pool each unit's own samples
+with its neighbours' samples that fall within a per-pair distance of the contact, and
+compare the "hard" (strict within-unit) and "soft" (boundary-pooled) distributions.
+
+```python
+import pandas as pd
+from geomodeltools import plot_soft_boundary_boxplots
+
+# matrix.loc[neighbor, target] = pooling distance (m); 0/missing = no pooling
+matrix = pd.DataFrame(0.0, index=["Sulfide", "Waste"], columns=["Sulfide", "Waste"])
+matrix.loc["Waste", "Sulfide"] = 5.0   # Waste samples within 5 m of the contact pool into Sulfide
+matrix.loc["Sulfide", "Waste"] = 5.0   # and vice versa
+
+fig = plot_soft_boundary_boxplots(df, coords=["x", "y", "z"], value="cu_pct", unit="lithology",
+                                   soft_boundary_matrix=matrix, log=True)
+```
+
+One panel per target unit (a column of `soft_boundary_matrix`), each a box plot of that
+unit's `hard` and `soft` populations plus one box per contributing neighbour's own
+pooled-in slice, so you can see both the overall effect of pooling and which neighbour is
+driving it. `soft_boundary_values` returns the same data as plain Python lists, if you
+want the numbers without the figure.
+
+This generalises `Funciones_RAguirre.Geostats_RA.soft_boundary_samples` (same pooling
+rule, via this package's own `distance_to_contact`) with "hard" and "soft" kept separate
+instead of merged into one column, and the per-neighbour slices kept separate too. No
+box-plot companion to that function exists in the reference code, so the one-panel-per-
+unit matrix layout here is this package's own design, not a port — flag it if it doesn't
+match what you had in mind.
+
 ## HTML report (interactive, no Python needed to view)
 
 `write_html` builds one HTML file with dropdowns for every numeric/categorical column you

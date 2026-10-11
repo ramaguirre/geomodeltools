@@ -124,8 +124,10 @@ def quick_eda(
     with its weighted count/mean/median/std/CoV.
 
     With `category`: the probability plot splits into one curve per category (ordered by
-    median), next to a violin plot and a coefficient-of-variation bar chart by category, so
-    you can see at a glance which units are tight/variable or stand out from the rest.
+    median), next to a violin plot and a coefficient-of-variation scatter (std vs. mean,
+    one labelled point per category — points on the same line through the origin share a
+    CoV), so you can see at a glance which units are tight/variable or stand out from the
+    rest.
 
     Parameters:
         df: input table.
@@ -194,12 +196,14 @@ def quick_eda(
     ax_violin.set_ylabel(value)
     ax_violin.set_title(f"{value} by {category}")
 
-    cov = [data["summary"][cat]["cov"] for cat in ordered]
-    ax_cov.bar(range(len(ordered)), cov, color="steelblue")
-    ax_cov.set_xticks(range(len(ordered)))
-    ax_cov.set_xticklabels(ordered, rotation=45, ha="right")
-    ax_cov.set_ylabel("Coefficient of variation (std / mean)")
-    ax_cov.set_title("Variability by category")
+    means = [data["summary"][cat]["mean"] for cat in ordered]
+    stds = [data["summary"][cat]["std"] for cat in ordered]
+    ax_cov.scatter(means, stds, color="steelblue")
+    for cat, x, y in zip(ordered, means, stds):
+        ax_cov.annotate(cat, (x, y), fontsize=8, xytext=(3, 3), textcoords="offset points")
+    ax_cov.set_xlabel(f"mean {value}")
+    ax_cov.set_ylabel("std")
+    ax_cov.set_title("Coeficiente de variación (std vs. mean by category)")
 
     fig.suptitle(f"{value} — quick EDA by {category}")
     fig.tight_layout()

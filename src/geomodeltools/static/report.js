@@ -118,8 +118,14 @@
       });
       plot("numeric-chart-2", violinTraces, { title: byCat.value + " by " + byCat.category, yaxis: { title: byCat.value, type: axType } });
 
-      plot("numeric-chart-3", [{ type: "bar", x: order, y: order.map(function (cat) { return byCat.summary[cat].cov; }), marker: { color: "#4a7ab5" } }], {
-        title: "coefficient of variation by " + byCat.category, yaxis: { title: "std / mean" },
+      plot("numeric-chart-3", [{
+        type: "scatter", mode: "markers+text",
+        x: order.map(function (cat) { return byCat.summary[cat].mean; }),
+        y: order.map(function (cat) { return byCat.summary[cat].std; }),
+        text: order, textposition: "top center", marker: { color: "#4a7ab5", size: 8 },
+      }], {
+        title: "coeficiente de variación (std vs. mean) by " + byCat.category,
+        xaxis: { title: "mean " + byCat.value }, yaxis: { title: "std" },
       });
     }
 
