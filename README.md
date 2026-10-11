@@ -8,6 +8,8 @@ Reusable helpers for 3D geological modeling workflows.
 - Inward polygon buffering with optional PyVista point cloud output, with spacings
   derived from the map scale and an adaptive mode for narrow polygons.
 - DEM-based Z assignment using OpenTopography rasters.
+- Quick EDA and contact plots for numeric and categorical unit attributes (`quick_eda`,
+  `categorical_eda`, `cat_vs_cat`, `contact_plot`), also from the command line.
 
 ## Install
 
@@ -116,3 +118,49 @@ repeats values.
 By default, `add_z_from_opentopography` assumes PSAD56 / UTM zone 19S
 (EPSG:24879) for inputs with no CRS set, and writes the DEM GeoTIFF in that
 same CRS. Pass `crs=...` to target a different UTM zone or datum.
+
+## Quick EDA and contact plots
+
+Exploratory plots for a drillhole/model table: how a numeric or categorical attribute
+behaves overall, by geological unit, or across the boundary between two units. Every
+function returns a matplotlib `Figure` (nothing is saved unless you call `fig.savefig(...)`
+yourself), so they work the same in a notebook or a script.
+
+```python
+from geomodeltools import quick_eda, categorical_eda, cat_vs_cat, contact_plot
+
+# Numeric variable, split by geological unit: probability plot, violin, CoV by unit
+fig = quick_eda(df, value="cu_pct", category="lithology", log=True)
+
+# A categorical column alone: frequency bar chart
+fig = categorical_eda(df, category="alteration")
+
+# Two categorical columns: alteration composition within each lithology
+fig = cat_vs_cat(df, category_x="lithology", category_y="alteration")
+
+# Contact plot: how cu_pct (or, with category=..., a categorical column) changes with
+# distance from the boundary between two units
+fig = contact_plot(
+    df, coords=["x", "y", "z"], unit="lithology",
+    inside="Sulfide", outside="Waste", value="cu_pct",
+)
+```
+
+Same thing from a terminal, no Python needed:
+
+```bash
+geomodeltools-eda data.csv --value cu_pct --category lithology --log -o eda.png
+geomodeltools-contact data.csv --coords x y z --unit lithology \
+    --inside Sulfide --outside Waste --value cu_pct -o contact.png
+```
+
+`contact_plot` (and the CLI's `--inside`/`--outside`) accept more than one unit code per
+side, and an optional `contact=`/`--contact` code for points that sit exactly on the
+boundary. `weight=`/`--weight` applies to every function above. See each function's
+docstring for the rest of the knobs (`bin_width`, `n_bins`, `agg`, `normalize`, ...).
+
+This started from the EDA and contact-plot functions in the private `Funciones_RAguirre`
+repo (`quick_eda`, `violin_by_cat`, `contact_interactive_cutoff`, `bar_cat_vs_cat`...),
+rewritten here with no Jupyter/seaborn dependency and a `scipy.spatial.cKDTree` distance
+calculation in place of the original's batched `cdist` loop. That repo is unchanged and
+stays the reference implementation.

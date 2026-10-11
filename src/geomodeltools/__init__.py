@@ -14,6 +14,15 @@ from .colour import (
     read_mapx_symbology,
     symbology_colors,
 )
+from .eda import cat_vs_cat, categorical_eda, category_summary, quick_eda
+from .contacts import (
+    contact_composition,
+    contact_plot,
+    contact_profile,
+    distance_to_contact,
+    plot_contact_composition,
+    plot_contact_profile,
+)
 
 __all__ = [
     "bufferize_2d_polygons",
@@ -29,4 +38,14 @@ __all__ = [
     "leapfrog_colour_palette",
     "leapfrog_colour2dictionary",
     "lfc2dict",
+    "quick_eda",
+    "categorical_eda",
+    "cat_vs_cat",
+    "category_summary",
+    "distance_to_contact",
+    "contact_profile",
+    "contact_composition",
+    "plot_contact_profile",
+    "plot_contact_composition",
+    "contact_plot",
 ]
