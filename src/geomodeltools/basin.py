@@ -424,6 +424,7 @@ class BasinResult:
     frame: Frame
     params: BasinParams
     qa: dict = field(default_factory=dict)
+    dist_field: object = None
 
     def surface(self, which: str, real_coords: bool = False) -> np.ndarray:
         z = self.z_top if which == "top" else self.z_base
@@ -431,6 +432,29 @@ class BasinResult:
         if real_coords:
             xyz = xyz + np.asarray(self.frame.origin)
         return xyz
+
+
+def filled_outline(result: BasinResult, min_area: float = 0.0):
+    """Outline of the basin as the surface sees it: the zero contour of the (filled) distance field, in real coordinates.
+
+    With a `cover` the outline continues under the younger polygons, so it is the original polygon plus the covered parts.
+    Returns a shapely (Multi)Polygon.
+    """
+    import shapely
+    from rasterio import features
+    from rasterio.transform import from_origin
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+
+    fld = result.dist_field
+    c = fld.c
+    transform = from_origin(fld.x0 - c / 2, fld.y0 + (fld.ny - 0.5) * c, c, c)
+    mask = (fld.grid > 0)[::-1].astype("uint8")                        # row 0 = north for rasterio
+    polys = [shape(g) for g, v in features.shapes(mask, mask=mask.astype(bool), transform=transform) if v == 1]
+    union = unary_union([g for g in polys if g.area >= min_area])
+    x0, y0, _ = result.frame.origin
+    out = shapely.transform(union, lambda xy: xy + np.array([x0, y0]))
+    return shapely.buffer(out, 0)
 
 
 def write_mesh(path, xyz, faces):
@@ -497,6 +521,7 @@ def build_basin_surface(polygons, crs, dem_path, bbox, params: BasinParams | Non
     res = BasinResult(vertices=v, faces=f, z_top=zt, z_base=zb, d=d, frame=frame, params=p)
     if dem.outside and verbose:
         print(f"note: {dem.outside} vertex lookups fell outside the DEM (edge values were used)")
+    res.dist_field = field
     res.qa = qa(v, f, zt, zb, d, local, field, p, out_dir=out, name=name, verbose=verbose, z_offset=frame.origin[2])
     if out:
         for which in ("top", "base"):
