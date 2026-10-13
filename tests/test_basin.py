@@ -102,3 +102,30 @@ def test_older_basin_continues_under_a_younger_cover_and_never_touches_it(dem):
     ya = young.surface("base", real_coords=True)[:, :2].round(4)
     oa = res.surface("base", real_coords=True)[:, :2].round(4)
     assert len({tuple(r) for r in ya} & {tuple(r) for r in oa}) == 0
+
+
+def _sharp_vertices(geom, deg=60.0):
+    """Number of ring vertices where the outline turns by more than `deg` degrees."""
+    n = 0
+    for g in getattr(geom, "geoms", [geom]):
+        for ring in [g.exterior, *g.interiors]:
+            xy = np.asarray(ring.coords)[:-1]
+            a, b = xy - np.roll(xy, 1, axis=0), np.roll(xy, -1, axis=0) - xy
+            turn = np.degrees(np.abs(np.arctan2(a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0], (a * b).sum(1))))
+            n += int((turn > deg).sum())
+    return n
+
+
+def test_filled_outline_is_smooth_and_has_the_right_area(dem):
+    circle = shapely.Point(X0 + 3000, Y0 + 3000).buffer(900.0, 64)
+    channel = shapely.box(X0 + 2940, Y0 + 1800, X0 + 3060, Y0 + 4200).intersection(circle)
+    old_poly = circle.difference(channel)
+    p = bs.BasinParams(z_max=60.0, L=120.0, edge_spacing=37.0, grid_cell=18.5, max_edge=800.0, refine_passes=2)
+    res = bs.build_basin_surface(old_poly, CRS, dem, BBOX, p, verbose=False, cover=channel)
+    out = bs.filled_outline(res)
+    assert out.is_valid
+    assert out.area == pytest.approx(circle.area, rel=0.03)                         # original + the covered part
+    assert out.area > old_poly.area
+    assert out.symmetric_difference(circle).area < 0.03 * circle.area
+    # no raster staircase: the old grid vectorisation had hundreds of right-angle corners, this one has only the real ones
+    assert _sharp_vertices(out) <= 12

@@ -77,7 +77,7 @@ a = build_basin_surface(polys_A, crs, dem_path, bbox, BasinParams(z_max=15, L=25
 big = (bbox[0] - 10, bbox[1] + 10, bbox[2] - 10, bbox[3] + 10)
 b = build_basin_surface(polys_B, crs, dem_path, big, BasinParams(z_max=80, L=200, edge_spacing=47, grid_cell=20),
                         out_dir="out", name="basin_B", cover=polys_A, younger=a)
-outline_B = filled_outline(b)      # the basin outline as the surface sees it, including the part under basin A
+outline_B = filled_outline(b)      # the basin outline as the surface sees it, including the part under basin A   # exact map edges + a smooth (marching-squares) edge only under the cover
 ```
 
 Outputs per basin: `<name>_base.obj` and `<name>_top.obj` (real coordinates), `*_local.ply` (local frame),

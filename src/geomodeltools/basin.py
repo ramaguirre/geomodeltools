@@ -434,26 +434,56 @@ class BasinResult:
         return xyz
 
 
-def filled_outline(result: BasinResult, min_area: float = 0.0):
-    """Outline of the basin as the surface sees it: the zero contour of the (filled) distance field, in real coordinates.
+def _contour_polygons(x, y, z, level=0.0):
+    """Polygons of the region z > level, edges placed by linear interpolation between grid nodes (marching squares)."""
+    import contourpy
+    import shapely
+    from contourpy import FillType
 
-    With a `cover` the outline continues under the younger polygons, so it is the original polygon plus the covered parts.
+    gen = contourpy.contour_generator(x, y, z, fill_type=FillType.ChunkCombinedOffsetOffset)
+    points, offsets, outer = gen.filled(level, np.inf)
+    polys = []
+    for pts, off, out in zip(points, offsets, outer):
+        if pts is None:
+            continue
+        for k in range(len(out) - 1):
+            rings = [pts[off[i]:off[i + 1]] for i in range(out[k], out[k + 1])]
+            polys.append(shapely.Polygon(rings[0], rings[1:]))
+    return polys
+
+
+def filled_outline(result: BasinResult, min_area: float = 0.0, simplify: float = 0.1):
+    """Outline of the basin as the surface sees it, in real coordinates: the original polygon plus the parts under the cover.
+
+    Where the edge is a real map edge the outline IS the original polygon edge (exact vertices). Only under the cover polygons,
+    where the surface continues the basin by the harmonic fill, is the edge taken from the zero contour of the distance grid,
+    interpolated between nodes (marching squares), so no raster staircase. `simplify` is a tolerance in grid cells.
     Returns a shapely (Multi)Polygon.
     """
     import shapely
-    from rasterio import features
-    from rasterio.transform import from_origin
-    from shapely.geometry import shape
     from shapely.ops import unary_union
 
     fld = result.dist_field
     c = fld.c
-    transform = from_origin(fld.x0 - c / 2, fld.y0 + (fld.ny - 0.5) * c, c, c)
-    mask = (fld.grid > 0)[::-1].astype("uint8")                        # row 0 = north for rasterio
-    polys = [shape(g) for g, v in features.shapes(mask, mask=mask.astype(bool), transform=transform) if v == 1]
-    union = unary_union([g for g in polys if g.area >= min_area])
     x0, y0, _ = result.frame.origin
-    out = shapely.transform(union, lambda xy: xy + np.array([x0, y0]))
+    poly = fld.polygon if fld.polygon.is_valid else shapely.make_valid(fld.polygon)
+    if fld.cover is None:
+        out = poly
+    else:
+        xs = fld.x0 + c * np.arange(fld.nx)
+        ys = fld.y0 + c * np.arange(fld.ny)
+        under = unary_union(_contour_polygons(xs, ys, fld.grid)).intersection(fld.cover)
+        under = under.simplify(simplify * c, preserve_topology=True)
+        # the grid edge and the exact cover edge differ by up to a cell: close the thin seams, but only inside the cover,
+        # so the real map edges outside it stay exactly as drawn
+        joined = unary_union([poly, under]).buffer(0)
+        closed = shapely.buffer(shapely.buffer(joined, c, join_style="round"), -c, join_style="round")
+        out = unary_union([poly, closed.intersection(fld.cover)]).buffer(0)
+        holes = [shapely.Polygon(h) for g in getattr(out, "geoms", [out]) for h in g.interiors]
+        holes = [h for h in holes if h.area < (3 * c) ** 2 or (h.intersects(fld.cover) and h.buffer(-c).is_empty)]
+        out = unary_union([out] + holes).buffer(0)      # specks and hairline slits left by the seams
+    out = unary_union([g for g in getattr(out, "geoms", [out]) if g.area >= min_area])
+    out = shapely.transform(out, lambda xy: xy + np.array([x0, y0]))
     return shapely.buffer(out, 0)
 
 
