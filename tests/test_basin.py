@@ -78,3 +78,27 @@ def test_polygon_touching_the_box_is_cut_back(dem, capsys):
     res = bs.build_basin_surface(big, CRS, dem, BBOX, PARAMS, verbose=False)
     assert "cut off" in capsys.readouterr().out
     assert res.qa["flipped_triangles"] == 0
+
+
+def test_older_basin_continues_under_a_younger_cover_and_never_touches_it(dem):
+    circle = shapely.Point(X0 + 3000, Y0 + 3000).buffer(900.0, 64)
+    channel = shapely.box(X0 + 2940, Y0 + 1800, X0 + 3060, Y0 + 4200)          # crosses the whole basin, 120 m wide
+    p_young = bs.BasinParams(z_max=10.0, L=30.0, edge_spacing=25.0, grid_cell=12.5, max_edge=800.0, refine_passes=2)
+    young = bs.build_basin_surface(channel.intersection(circle), CRS, dem, BBOX, p_young, verbose=False)
+    old_poly = circle.difference(channel)                                           # the map shows the older basin in two halves
+    p_old = bs.BasinParams(z_max=60.0, L=120.0, edge_spacing=37.0, grid_cell=18.5, max_edge=800.0, refine_passes=2)
+    bbox_old = (BBOX[0] + 10, BBOX[1] - 10, BBOX[2] + 10, BBOX[3] - 10)             # different box: no shared box vertices
+    res = bs.build_basin_surface(old_poly, CRS, dem, bbox_old, p_old, verbose=False, cover=channel.intersection(circle),
+                                 younger=young, gap=1.0)
+    q = res.qa
+    assert q["flipped_triangles"] == 0 and q["degenerate_triangles"] == 0
+    # the basin does not close on the channel: depth under the channel centre is a large fraction of the depth beside it
+    x0, y0 = (BBOX[0] + 10 + BBOX[1] - 10) / 2, (BBOX[2] + 10 + BBOX[3] - 10) / 2
+    xy = res.vertices
+    under = (np.abs(xy[:, 0] - (X0 + 3000 - x0)) < 150) & (np.abs(xy[:, 1] - (Y0 + 3000 - y0)) < 300)   # along the channel centre
+    assert under.sum() >= 3 and (res.z_top - res.z_base)[under].mean() > 25.0      # the basin continues under the channel
+    assert q["mean_depth_m"] > 15.0
+    # no vertex of the older surface coincides with one of the younger surface
+    ya = young.surface("base", real_coords=True)[:, :2].round(4)
+    oa = res.surface("base", real_coords=True)[:, :2].round(4)
+    assert len({tuple(r) for r in ya} & {tuple(r) for r in oa}) == 0

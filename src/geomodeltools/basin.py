@@ -95,34 +95,55 @@ def prepare(polygons, crs, bbox, spacing, z0: float = 0.0):
 
 
 class DistanceField:
-    """Signed distance on a grid (for sampling everywhere) plus exact distances near the ring (for the vertices)."""
+    """Signed distance on a grid (for sampling everywhere) plus exact distances near the real edges (for the vertices).
 
-    def __init__(self, polygon, bbox, params: BasinParams):
+    `cover` (optional): younger polygons lying over or beside the basin. Their outlines are NOT basin edges: the cells they
+    occupy are unknown, and the field there is filled harmonically (Laplace equation) from the known inside (d > 0) and
+    outside (d < 0) cells around them, so the basin edge continues smoothly under the cover instead of closing on it.
+    """
+
+    def __init__(self, polygon, bbox, params: BasinParams, cover=None):
         import shapely
         from rasterio import features
         from rasterio.transform import from_origin
         from scipy import ndimage
 
         self.polygon, self.bbox, self.p = polygon, bbox, params
+        self.cover = cover if cover is not None and not cover.is_empty else None
         xmin, xmax, ymin, ymax = bbox
         c = params.grid_cell
         self.nx, self.ny = int(np.ceil((xmax - xmin) / c)) + 1, int(np.ceil((ymax - ymin) / c)) + 1
         self.x0, self.y0, self.c = xmin, ymin, c
         transform = from_origin(xmin - c / 2, ymin + (self.ny - 0.5) * c, c, c)   # row 0 = northmost
-        inside = features.rasterize([(polygon, 1)], out_shape=(self.ny, self.nx), transform=transform, fill=0,
-                                    dtype="uint8", all_touched=False).astype(bool)[::-1]   # row 0 = south
-        d_in = ndimage.distance_transform_edt(inside) - 0.5
-        d_out = ndimage.distance_transform_edt(~inside) - 0.5
-        d = np.where(inside, d_in, -d_out) * c
+
+        def raster(geom):
+            return features.rasterize([(geom, 1)], out_shape=(self.ny, self.nx), transform=transform, fill=0,
+                                      dtype="uint8", all_touched=False).astype(bool)[::-1]   # row 0 = south
+
+        if self.cover is None:
+            inside = raster(polygon)
+            d_in = ndimage.distance_transform_edt(inside) - 0.5
+            d_out = ndimage.distance_transform_edt(~inside) - 0.5
+            d = np.where(inside, d_in, -d_out) * c
+            real = polygon.boundary
+        else:
+            unknown = raster(self.cover)
+            inside = raster(polygon.difference(self.cover)) & ~unknown
+            outside = ~inside & ~unknown
+            d_in = ndimage.distance_transform_edt(~outside) - 0.5 if outside.any() else np.full(inside.shape, 1e6)
+            d_out = ndimage.distance_transform_edt(~inside) - 0.5 if inside.any() else np.full(inside.shape, 1e6)
+            d = np.where(inside, d_in, np.where(outside, -d_out, 0.0)) * c
+            d = _harmonic_fill(d, unknown)
+            real = polygon.boundary.difference(self.cover.buffer(1.5 * c))
         d_smooth = ndimage.gaussian_filter(np.where(d > 0, d, 0.0), params.smooth_cells)
-        f = np.clip(d / (3 * c), 0.0, 1.0)                 # 0 at the ring: exact there; smooth from 3 cells in
+        f = np.clip(d / (3 * c), 0.0, 1.0)                 # 0 at the edge: exact there; smooth from 3 cells in
         self.grid = np.where(d > 0, (1 - f) * d + f * d_smooth, d)
-        self.boundary = polygon.boundary
+        self.real_edges = real
         segs = []
-        for ring in _rings(polygon):
-            xy = np.asarray(ring.coords)
+        for line in _lines(real):
+            xy = np.asarray(line.coords)
             segs += [shapely.linestrings(xy[i:i + 2]) for i in range(len(xy) - 1)]
-        self.tree = shapely.STRtree(segs)
+        self.tree = shapely.STRtree(segs) if segs else None
         self.near = 3.0 * c
 
     def sample_grid(self, x, y):
@@ -131,12 +152,14 @@ class DistanceField:
                                        order=1, mode="nearest")
 
     def at(self, x, y):
-        """Signed distance at points: grid value, replaced by the exact distance where closer than 3 cells to the ring."""
+        """Signed distance at points: grid value, replaced by the exact distance where closer than 3 cells to a real edge."""
         import shapely
         x, y = np.atleast_1d(np.asarray(x, float)), np.atleast_1d(np.asarray(y, float))
         d = self.sample_grid(x, y)
         close = np.abs(d) < self.near
-        if close.any():
+        if self.cover is not None and close.any():
+            close &= ~shapely.contains_xy(self.cover, x, y)
+        if close.any() and self.tree is not None:
             pts = shapely.points(x[close], y[close])
             idx, dist = self.tree.query_nearest(pts, return_distance=True, all_matches=False)
             exact = np.empty(len(pts))
@@ -148,6 +171,46 @@ class DistanceField:
             smooth = d[close]
             d[close] = np.where(exact > 0, (1 - f) * exact + f * smooth, exact)
         return d
+
+
+def _harmonic_fill(d, unknown):
+    """Fill the `unknown` cells of d by solving Laplace's equation with the known neighbours as boundary values."""
+    from scipy import sparse
+    from scipy.sparse.linalg import spsolve
+
+    if not unknown.any():
+        return d
+    ny, nx = d.shape
+    n = int(unknown.sum())
+    idx = -np.ones(d.shape, int)
+    idx[unknown] = np.arange(n)
+    rows, cols, vals, rhs = [], [], [], np.zeros(n)
+    ys, xs = np.nonzero(unknown)
+    diag = np.zeros(n)
+    for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        y2, x2 = ys + dy, xs + dx
+        ok = (y2 >= 0) & (y2 < ny) & (x2 >= 0) & (x2 < nx)
+        i = idx[ys[ok], xs[ok]]
+        yy, xx = y2[ok], x2[ok]
+        j_unknown = unknown[yy, xx]
+        np.add.at(diag, i, 1.0)
+        rows += list(i[j_unknown]); cols += list(idx[yy[j_unknown], xx[j_unknown]]); vals += [-1.0] * int(j_unknown.sum())
+        np.add.at(rhs, i[~j_unknown], d[yy[~j_unknown], xx[~j_unknown]])
+    rows += list(range(n)); cols += list(range(n)); vals += list(diag + 1e-9)
+    a = sparse.csc_matrix((vals, (rows, cols)), shape=(n, n))
+    out = d.copy()
+    out[unknown] = spsolve(a, rhs)
+    return out
+
+
+def _lines(geom):
+    if geom is None or geom.is_empty:
+        return []
+    if geom.geom_type == "LineString":
+        return [geom]
+    if geom.geom_type in ("MultiLineString", "GeometryCollection"):
+        return [g for part in geom.geoms for g in _lines(part)]
+    return []
 
 
 def _rings(polygon):
@@ -216,26 +279,29 @@ def z_base(z_top, d, p: BasinParams):
 # ----------------------------------------------------------------------------------------------------------
 
 
-def _pslg(polygon, bbox, box_spacing):
+def _pslg(polygon, bbox, box_spacing, real_edges=None):
+    """Planar straight-line graph: the polygon rings (or, with a cover, only the real edges) and the box edges."""
     xmin, xmax, ymin, ymax = bbox
-    verts, segs = [], []
+    verts, segs, seen = [], [], {}
 
-    def add_ring(xy):
-        xy = np.asarray(xy)[:-1]
-        base = len(verts)
-        verts.extend(map(tuple, xy))
-        n = len(xy)
-        segs.extend((base + i, base + (i + 1) % n) for i in range(n))
+    def vid(pt):
+        key = (round(pt[0], 6), round(pt[1], 6))
+        if key not in seen:
+            seen[key] = len(verts)
+            verts.append(tuple(pt))
+        return seen[key]
 
-    for ring in _rings(polygon):
-        add_ring(ring.coords)
+    lines = list(_rings(polygon)) if real_edges is None else _lines(real_edges)
+    for line in lines:
+        xy = np.asarray(line.coords)
+        ids = [vid(q) for q in xy]
+        segs.extend((a, b) for a, b in zip(ids[:-1], ids[1:]) if a != b)
     nx = max(1, int(np.ceil((xmax - xmin) / box_spacing)))
     ny = max(1, int(np.ceil((ymax - ymin) / box_spacing)))
     pts = ([(x, ymin) for x in np.linspace(xmin, xmax, nx + 1)[:-1]] + [(xmax, y) for y in np.linspace(ymin, ymax, ny + 1)[:-1]]
            + [(x, ymax) for x in np.linspace(xmax, xmin, nx + 1)[:-1]] + [(xmin, y) for y in np.linspace(ymax, ymin, ny + 1)[:-1]])
-    base = len(verts)
-    verts.extend(pts)
-    segs.extend((base + i, base + (i + 1) % len(pts)) for i in range(len(pts)))
+    ids = [vid(q) for q in pts]
+    segs.extend((ids[i], ids[(i + 1) % len(ids)]) for i in range(len(ids)))
     return np.asarray(verts, float), np.asarray(segs, int)
 
 
@@ -243,7 +309,8 @@ def mesh(polygon, bbox, field: DistanceField, p: BasinParams):
     """Graded constrained Delaunay triangulation (triangle 'pq30', refined with a size field of |d|)."""
     import triangle as tr
 
-    v, s = _pslg(polygon, bbox, p.box_edge_spacing or p.max_edge)
+    v, s = _pslg(polygon, bbox, p.box_edge_spacing or p.max_edge,
+                 real_edges=field.real_edges if field.cover is not None else None)
     t = tr.triangulate({"vertices": v, "segments": s}, "pq30")
     for _ in range(p.refine_passes):
         tri = t["triangles"]
@@ -293,7 +360,8 @@ def qa(v, f, z_t, z_b, d, polygon, field, p: BasinParams, out_dir: Path | None =
         "outside_base_above_top": bool((depth[d < -1e-6] < 0).all()) if (d < -1e-6).any() else True,
     }
     cen = v[f].mean(axis=1)
-    inside = shapely.contains_xy(polygon, cen[:, 0], cen[:, 1])
+    inside = ((field.sample_grid(cen[:, 0], cen[:, 1]) > 0) if field.cover is not None
+              else shapely.contains_xy(polygon, cen[:, 0], cen[:, 1]))
     mean_depth = depth[f].mean(axis=1)
     res["basin_volume_m3"] = float((area[inside] * mean_depth[inside]).sum())
     res["polygon_area_m2"] = float(area[inside].sum())
@@ -379,9 +447,23 @@ def write_mesh(path, xyz, faces):
             np.savetxt(fh, faces + 1, fmt="f %d %d %d")
 
 
+def _local(geom, frame):
+    import shapely
+
+    x0, y0, _ = frame.origin
+    g = shapely.buffer(geom if geom.is_valid else shapely.make_valid(geom), 0)
+    return shapely.transform(g, lambda c: c - np.array([x0, y0]))
+
+
 def build_basin_surface(polygons, crs, dem_path, bbox, params: BasinParams | None = None, out_dir=None, name="basin",
-                        verbose=True) -> BasinResult:
-    """Polygon + DEM + box -> top and base surfaces on one triangulation. See the module docstring."""
+                        verbose=True, cover=None, younger=None, gap: float = 1.0) -> BasinResult:
+    """Polygon + DEM + box -> top and base surfaces on one triangulation. See the module docstring.
+
+    cover:   younger polygons (shapely, same CRS) lying over/beside this basin; their outlines are not basin edges and the
+             distance field is filled across them (see DistanceField).
+    younger: BasinResult of the younger basin. Where this basin is deeper than 0, its base is kept at least `gap` metres
+             below the younger base, so the two surfaces never touch (no coincident points for the CSG).
+    """
     p = params or BasinParams()
     out = Path(out_dir) if out_dir else None
     if out:
@@ -393,11 +475,25 @@ def build_basin_surface(polygons, crs, dem_path, bbox, params: BasinParams | Non
     z0 = float(np.round(np.mean(dem0(xs.ravel(), ys.ravel())), 0))
     frame = Frame(frame.crs, (frame.origin[0], frame.origin[1], z0))
     dem = Dem(dem_path, frame)
-    field = DistanceField(local, bbox_l, p)
+    cover_l = None
+    if cover is not None:
+        from shapely.ops import unary_union
+        geoms = [cover] if hasattr(cover, "geom_type") else list(cover)
+        cover_l = _local(unary_union(geoms), frame)
+    field = DistanceField(local, bbox_l, p, cover=cover_l)
     v, f = mesh(local, bbox_l, field, p)
     d = field.at(v[:, 0], v[:, 1])
     zt = dem(v[:, 0], v[:, 1])
     zb = z_base(zt, d, p)
+    if younger is not None:
+        import matplotlib.tri as mtri
+        shift = np.asarray(younger.frame.origin[:2]) - np.asarray(frame.origin[:2])        # younger local -> this local
+        tri = mtri.Triangulation(younger.vertices[:, 0] + shift[0], younger.vertices[:, 1] + shift[1], younger.faces)
+        yb = np.ma.filled(mtri.LinearTriInterpolator(tri, younger.z_base)(v[:, 0], v[:, 1]), np.nan)
+        yb = yb + (younger.frame.origin[2] - frame.origin[2])
+        ok = np.isfinite(yb) & (d > 0)
+        ramp = smoothstep(d / (2.0 * p.edge_spacing))
+        zb = np.where(ok, np.minimum(zb, yb - gap * ramp), zb)
     res = BasinResult(vertices=v, faces=f, z_top=zt, z_base=zb, d=d, frame=frame, params=p)
     if dem.outside and verbose:
         print(f"note: {dem.outside} vertex lookups fell outside the DEM (edge values were used)")
