@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geomodeltools"
-version = "0.4.0"
+version = "0.5.0"
 description = "Utilities for 3D geological modeling with GeoPandas and DEM workflows."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,7 +18,9 @@ dependencies = [
   "geopandas>=0.14",
   "shapely>=2.0",
   "rasterio>=1.3",
-  "requests>=2.31"
+  "requests>=2.31",
+  "scipy>=1.10",
+  "matplotlib>=3.7"
 ]
 
 [project.optional-dependencies]
@@ -26,8 +28,16 @@ viz = ["pyvista>=0.43"]
 basin = ["scipy>=1.10", "triangle>=20230923", "matplotlib>=3.7"]
 dev = ["pytest>=7", "scipy>=1.10", "triangle>=20230923", "matplotlib>=3.7"]
 
+[project.scripts]
+geomodeltools-eda = "geomodeltools.cli:eda_main"
+geomodeltools-contact = "geomodeltools.cli:contact_main"
+geomodeltools-report = "geomodeltools.cli:report_main"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+geomodeltools = ["static/*.js"]

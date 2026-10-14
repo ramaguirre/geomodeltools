@@ -13,12 +13,17 @@ Reusable helpers for 3D geological modeling workflows.
 - Unit colours from the ICS/CGMW chart with a CIEDE2000 distinguishability check (`geomodeltools.palette`, `docs/unit_colours.md`).
 - Contact orientation from outcrop traces, the rule of V's as a plane fit (`geomodeltools.contacts`, `docs/contact_orientation.md`).
 
+- Quick EDA and contact plots for numeric and categorical unit attributes (`quick_eda`,
+  `categorical_eda`, `cat_vs_cat`, `contact_plot`; module `geomodeltools.contact_plots`, not to be confused with `geomodeltools.contacts`, the rule-of-V orientation), also from the command line.
+- A self-contained, interactive HTML report of the same plots (`write_html`): open it in
+  any browser, no server, no Node, nothing to install.
+
 ## Install
 
 From GitHub (a fixed version, no Git needed):
 
 ```bash
-pip install https://github.com/ramaguirre/geomodeltools/archive/refs/tags/v0.4.0.zip
+pip install https://github.com/ramaguirre/geomodeltools/archive/refs/tags/v0.5.0.zip
 ```
 
 For development, from a clone of this repo:
@@ -133,3 +138,134 @@ works as a cutter in a chronology. Top and base share one graded constrained Del
 `build_basin_surface(...)` writes PLY (local frame), OBJ (real coordinates), a frame JSON, a QA JSON and a transects plot,
 and prints QA: degenerate/flipped triangles, angle stats, `|Z_base - Z_top|` on the ring, inside/outside sign checks and
 the basin volume.
+
+## Quick EDA and contact plots
+
+Exploratory plots for a drillhole/model table: how a numeric or categorical attribute
+behaves overall, by geological unit, or across the boundary between two units. Every
+function returns a matplotlib `Figure` (nothing is saved unless you call `fig.savefig(...)`
+yourself), so they work the same in a notebook or a script.
+
+```python
+from geomodeltools import quick_eda, categorical_eda, cat_vs_cat, contact_plot
+
+# Numeric variable, split by geological unit: probability plot, violin, CoV by unit
+fig = quick_eda(df, value="cu_pct", category="lithology", log=True)
+
+# A categorical column alone: frequency bar chart
+fig = categorical_eda(df, category="alteration")
+
+# Two categorical columns: alteration composition within each lithology
+fig = cat_vs_cat(df, category_x="lithology", category_y="alteration")
+
+# Contact plot: how cu_pct (or, with category=..., a categorical column) changes with
+# distance from the boundary between two units. kind="profile" (default) draws a single
+# mean/median line; kind="boxplot" draws a literal box per distance bin instead
+# (Funciones_RAguirre.contact_boxplots' style).
+fig = contact_plot(
+    df, coords=["x", "y", "z"], unit="lithology",
+    inside="Sulfide", outside="Waste", value="cu_pct", kind="boxplot",
+)
+```
+
+Same thing from a terminal, no Python needed:
+
+```bash
+geomodeltools-eda data.csv --value cu_pct --category lithology --log -o eda.png
+geomodeltools-contact data.csv --coords x y z --unit lithology \
+    --inside Sulfide --outside Waste --value cu_pct -o contact.png
+```
+
+`contact_plot` (and the CLI's `--inside`/`--outside`) accept more than one unit code per
+side, and an optional `contact=`/`--contact` code for points that sit exactly on the
+boundary. `weight=`/`--weight` applies to every function above. See each function's
+docstring for the rest of the knobs (`bin_width`, `n_bins`, `agg`, `normalize`, ...).
+
+This started from the EDA and contact-plot functions in the private `Funciones_RAguirre`
+repo (`quick_eda`, `violin_by_cat`, `contact_interactive_cutoff`, `bar_cat_vs_cat`...),
+rewritten here with no Jupyter/seaborn dependency and a `scipy.spatial.cKDTree` distance
+calculation in place of the original's batched `cdist` loop. That repo is unchanged and
+stays the reference implementation.
+
+The CoV panel in `quick_eda` is a scatter of std vs. mean, one labelled point per
+category — points on the same line through the origin share a coefficient of variation —
+matching `Plotting_Functions_RAguirre.var_coeff`, not a bar chart of `std / mean`.
+
+## Soft-boundary (gradational contact) matrix of box plots
+
+For a contact known to be gradational rather than sharp: a matrix of contact box plots
+(`Funciones_RAguirre.contact_boxplots`' style — a literal box per distance bin, see above),
+one panel per unit pair, each spanning that pair's own "how far is the gradation" distance.
+
+```python
+import pandas as pd
+from geomodeltools import plot_soft_boundary_boxplots
+
+# matrix.loc[neighbor, target] = how far the gradation extends (m); 0/missing = no panel
+matrix = pd.DataFrame(0.0, index=["Sulfide", "Waste"], columns=["Sulfide", "Waste"])
+matrix.loc["Waste", "Sulfide"] = 15.0   # Sulfide's panel spans +/-15 m across the contact
+matrix.loc["Sulfide", "Waste"] = 20.0   # Waste's panel spans +/-20 m
+
+fig = plot_soft_boundary_boxplots(df, coords=["x", "y", "z"], value="cu_pct", unit="lithology",
+                                   soft_boundary_matrix=matrix, n_bins=8)
+```
+
+This is also useful on its own as `contact_plot(..., kind="boxplot")` for a single pair,
+without a matrix.
+
+`soft_boundary_values` is a separate, lower-level function: the per-unit "hard"
+(strict within-unit) vs. "soft" (neighbours within `soft_boundary_matrix`'s threshold
+pooled in) populations, generalising `Geostats_RA.soft_boundary_samples`'s merged-column
+result (reusing this package's own `distance_to_contact`, not a second distance
+implementation) with "hard"/"soft"/each neighbour's own slice kept separate instead of
+merged into one column.
+
+This generalises `Funciones_RAguirre.Geostats_RA.soft_boundary_samples` (same pooling
+rule, via this package's own `distance_to_contact`) with "hard" and "soft" kept separate
+instead of merged into one column, and the per-neighbour slices kept separate too. No
+box-plot companion to that function exists in the reference code, so the one-panel-per-
+unit matrix layout here is this package's own design, not a port — flag it if it doesn't
+match what you had in mind.
+
+## HTML report (interactive, no Python needed to view)
+
+`write_html` builds one HTML file with dropdowns for every numeric/categorical column you
+give it, Plotly charts (pan/zoom/hover), and a tab per kind of plot (Numeric, Categorical,
+Pairs, Contacts). It is self-contained — Plotly is inlined, not loaded from a CDN — so it
+opens straight from disk and can be emailed or dropped in a shared folder.
+
+```python
+from geomodeltools import write_html
+
+write_html(
+    df, "report.html",
+    numeric=["cu_pct", "au_gpt"],        # each gets an overall panel + one per categorical column
+    categorical=["lithology", "alteration"],  # each gets a frequency panel; auto-paired for composition
+    contacts=[{                           # each scenario gets a profile and/or composition panel
+        "coords": ["x", "y", "z"], "unit": "lithology",
+        "inside": "Sulfide", "outside": "Waste",
+        "value": "cu_pct", "category": "alteration",
+        "label": "Sulfide / Waste contact",
+    }],
+    weight="length",
+)
+```
+
+Or from a terminal (contact scenarios go in a small JSON file — see `build_report`'s
+docstring for the full set of keys each one takes):
+
+```bash
+geomodeltools-report data.csv --numeric cu_pct au_gpt --categorical lithology alteration -o report.html
+```
+
+Everything is computed once in Python (`build_report`, via the same `*_data()` functions
+`quick_eda`/`categorical_eda`/`cat_vs_cat` use for their static figures) and shipped to the
+browser as JSON; the JS only turns that into Plotly traces; it never recomputes a
+probability position, a weighted mean or a contact-distance bin itself — so the numbers in
+the report and in a `quick_eda(...)` figure never drift apart. Only histogram/violin/bar
+shapes are built from raw values client-side, which is Plotly's own job, the same as
+matplotlib's `ax.hist`/`ax.violinplot` do it internally.
+
+`src/geomodeltools/static/plotly.min.js` is vendored (copied from the `swath_local` repo's
+own vendoring of it); see `THIRD-PARTY-NOTICES.md`. `static/report.js` is hand-written plain
+JS with no build step — edit it directly, no bundler to run.
