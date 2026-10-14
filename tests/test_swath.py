@@ -36,8 +36,8 @@ def test_golden_files_match_their_manifest():
     man = json.loads((GOLDEN / "MANIFEST.json").read_text(encoding="utf-8"))
     assert man["contract_version"] == sw.CONTRACT_VERSION
     for rel, digest in man["sha256"].items():
-        data = (GOLDEN / rel).read_bytes().replace(b"\r\n", b"\n")
-        assert hashlib.sha256(data).hexdigest() == digest or hashlib.sha256((GOLDEN / rel).read_bytes()).hexdigest() == digest, rel
+        data = (GOLDEN / rel).read_bytes().replace(b"\r\n", b"\n")      # line endings differ between checkouts
+        assert hashlib.sha256(data).hexdigest() == digest, rel
 
 
 @pytest.mark.parametrize("case", list(CASES))

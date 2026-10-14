@@ -57,5 +57,5 @@ version = next(l.split('"')[1] for l in (SL / "src" / "engine.js").read_text(enc
 files = sorted(p for p in HERE.rglob("*") if p.is_file() and p.name not in ("MANIFEST.json", "generate.py", "README.md") and "__pycache__" not in p.parts)
 (HERE / "MANIFEST.json").write_text(json.dumps({
     "contract_version": 1, "source": "swath_local", "swath_local_commit": commit, "swath_local_src_dirty": dirty, "engine_version": version,
-    "sha256": {str(p.relative_to(HERE)).replace("\\", "/"): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}}, indent=1), encoding="utf-8")
+    "sha256": {str(p.relative_to(HERE)).replace("\\", "/"): hashlib.sha256(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest() for p in files}}, indent=1), encoding="utf-8")
 print("written", len(files), "files; swath_local", commit, "dirty" if dirty else "clean", "engine", version)

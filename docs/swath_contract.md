@@ -32,7 +32,7 @@ Building the grid from the block extents when there is no header, the grid check
 `tests/golden/swath/`: a small synthetic model and composites (unrotated and rotated 65 degrees), four cases (defaults, other
 multiplier, composite and block minimums, value maximum, UE filter), and the expected results written by the JavaScript engine of
 `swath_local` (validated against the original desktop tool on real models). `MANIFEST.json` records the `swath_local` commit and
-the SHA-256 of every file; `generate.py` regenerates everything and should be run only on a contract change.
+the SHA-256 of every file (line endings normalised to LF); `generate.py` regenerates everything and should be run only on a contract change.
 
 **Tolerance**: relative 1e-12 plus absolute 1e-13 (the percentage differences amplify a subtraction of two nearly equal grades).
 Counts, panel indices and QA numbers must be identical.
