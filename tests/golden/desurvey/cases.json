@@ -1,0 +1,114 @@
+{
+ "cases": {
+  "positive_down_skip": {
+   "collars": "collars.csv",
+   "surveys": "surveys.csv",
+   "intervals": "intervals.csv",
+   "columns": {
+    "hole": "HOLEID",
+    "xyz": [
+     "X",
+     "Y",
+     "Z"
+    ],
+    "length": "DEPTH",
+    "at": "AT",
+    "azimuth": "AZIMUTH",
+    "dip": "DIP",
+    "from_": "FROM",
+    "to": "TO"
+   },
+   "dip_positive_down": true,
+   "duplicates": "skip",
+   "trace_step": 10.0
+  },
+  "duplicates_first": {
+   "collars": "collars.csv",
+   "surveys": "surveys.csv",
+   "intervals": "intervals.csv",
+   "columns": {
+    "hole": "HOLEID",
+    "xyz": [
+     "X",
+     "Y",
+     "Z"
+    ],
+    "length": "DEPTH",
+    "at": "AT",
+    "azimuth": "AZIMUTH",
+    "dip": "DIP",
+    "from_": "FROM",
+    "to": "TO"
+   },
+   "dip_positive_down": true,
+   "duplicates": "first",
+   "trace_step": 10.0
+  },
+  "duplicates_last": {
+   "collars": "collars.csv",
+   "surveys": "surveys.csv",
+   "intervals": "intervals.csv",
+   "columns": {
+    "hole": "HOLEID",
+    "xyz": [
+     "X",
+     "Y",
+     "Z"
+    ],
+    "length": "DEPTH",
+    "at": "AT",
+    "azimuth": "AZIMUTH",
+    "dip": "DIP",
+    "from_": "FROM",
+    "to": "TO"
+   },
+   "dip_positive_down": true,
+   "duplicates": "last",
+   "trace_step": 10.0
+  },
+  "negative_down_skip": {
+   "collars": "collars_neg.csv",
+   "surveys": "surveys_neg.csv",
+   "intervals": "intervals.csv",
+   "columns": {
+    "hole": "HOLEID",
+    "xyz": [
+     "X",
+     "Y",
+     "Z"
+    ],
+    "length": "DEPTH",
+    "at": "AT",
+    "azimuth": "AZIMUTH",
+    "dip": "DIP",
+    "from_": "FROM",
+    "to": "TO"
+   },
+   "dip_positive_down": false,
+   "duplicates": "skip",
+   "trace_step": 10.0
+  },
+  "traces_every_25": {
+   "collars": "collars.csv",
+   "surveys": "surveys.csv",
+   "intervals": null,
+   "columns": {
+    "hole": "HOLEID",
+    "xyz": [
+     "X",
+     "Y",
+     "Z"
+    ],
+    "length": "DEPTH",
+    "at": "AT",
+    "azimuth": "AZIMUTH",
+    "dip": "DIP",
+    "from_": "FROM",
+    "to": "TO"
+   },
+   "dip_positive_down": true,
+   "duplicates": "skip",
+   "trace_step": 25.0
+  }
+ }
+}
