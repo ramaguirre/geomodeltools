@@ -8,13 +8,17 @@ Reusable helpers for 3D geological modeling workflows.
 - Inward polygon buffering with optional PyVista point cloud output, with spacings
   derived from the map scale and an adaptive mode for narrow polygons.
 - DEM-based Z assignment using OpenTopography rasters.
+- Leapfrog colour files (.lfc) and ArcGIS symbology readers (`geomodeltools.colour`).
+- Basin base surfaces for sedimentary cover (`geomodeltools.basin`, see below).
+- Unit colours from the ICS/CGMW chart with a CIEDE2000 distinguishability check (`geomodeltools.palette`, `docs/unit_colours.md`).
+- Contact orientation from outcrop traces, the rule of V's as a plane fit (`geomodeltools.contacts`, `docs/contact_orientation.md`).
 
 ## Install
 
 From GitHub (a fixed version, no Git needed):
 
 ```bash
-pip install https://github.com/ramaguirre/geomodeltools/archive/refs/tags/v0.3.0.zip
+pip install https://github.com/ramaguirre/geomodeltools/archive/refs/tags/v0.4.0.zip
 ```
 
 For development, from a clone of this repo:
