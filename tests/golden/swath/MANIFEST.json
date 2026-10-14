@@ -1,0 +1,20 @@
+{
+ "contract_version": 1,
+ "source": "swath_local",
+ "swath_local_commit": "b49b359",
+ "swath_local_src_dirty": false,
+ "engine_version": "1.1.0",
+ "sha256": {
+  "cases.json": "2241b617c15b90d9420b4a5159ba19ab60f9e32d22df7b81b464b5140c6df40e",
+  "data_rotated/blocks.csv": "13f2f97cf5228d6c1be0bb50bbce0753056af7d6602d5fc36d02d1926f2d1db5",
+  "data_rotated/header.txt": "a53dcb3ba0a83da841247245f06c332c8e3108cd44ba4037b17841bb16777930",
+  "data_rotated/samples.csv": "21d4a161eaa406c7e5fd35e70c8b1b88448f265351f67f93155370b4eccea872",
+  "data_unrotated/blocks.csv": "5a78dc95235ac96ece1f8f6e1df93bede2098c18f280439a1e6d31cd68060b88",
+  "data_unrotated/header.txt": "563c6daf9736f6efbaa31736b99c035501bcba0c40fa25ab5f05a69e17e052dd",
+  "data_unrotated/samples.csv": "64aeb7f32c25c43f4b9b66b11a56722da9dcc7bf630f1e1c4182bad9dc88036e",
+  "expected/rotated_default.json": "5a9166f610cd929973285162da4e178d3525ccce80790f90f68e802a399d3b5a",
+  "expected/rotated_options.json": "facd2a2bac235c62ae983ce5c9834ca1dfcae409776ac6b34f3d0f09a13f57c5",
+  "expected/unrotated_default.json": "07ec7269bb10bcfa71f5e43bbc724b35689bc8119886c80e3c04cba138eb7375",
+  "expected/unrotated_ue_filter.json": "73eb57d623a1c9c2cace1ba308f48354d5763d61f686766a6f7c1ff938bdd373"
+ }
+}

@@ -1,0 +1,154 @@
+{
+ "unrotated_default": {
+  "data": "data_unrotated",
+  "params": {
+   "samples_file": "samples.csv",
+   "blocks_file": "blocks.csv",
+   "header_file": "header.txt",
+   "samples": {
+    "value": "cut",
+    "ue": "uecu",
+    "x": "midx",
+    "y": "midy",
+    "z": "midz",
+    "length": "length"
+   },
+   "blocks": {
+    "value": "cu",
+    "ue": "ue",
+    "x": "xcentre",
+    "y": "ycentre",
+    "z": "zcentre",
+    "dx": "xlength",
+    "dy": "ylength",
+    "dz": "zlength"
+   },
+   "project_name": "test",
+   "variable_label": "Cu",
+   "multiplier": [
+    4,
+    4,
+    2
+   ],
+   "value_min": 0.0,
+   "value_max": null,
+   "min_samples": 1,
+   "min_blocks": 1
+  }
+ },
+ "rotated_default": {
+  "data": "data_rotated",
+  "params": {
+   "samples_file": "samples.csv",
+   "blocks_file": "blocks.csv",
+   "header_file": "header.txt",
+   "samples": {
+    "value": "cut",
+    "ue": "uecu",
+    "x": "midx",
+    "y": "midy",
+    "z": "midz",
+    "length": "length"
+   },
+   "blocks": {
+    "value": "cu",
+    "ue": "ue",
+    "x": "xcentre",
+    "y": "ycentre",
+    "z": "zcentre",
+    "dx": "xlength",
+    "dy": "ylength",
+    "dz": "zlength"
+   },
+   "project_name": "test",
+   "variable_label": "Cu",
+   "multiplier": [
+    4,
+    4,
+    2
+   ],
+   "value_min": 0.0,
+   "value_max": null,
+   "min_samples": 1,
+   "min_blocks": 1
+  }
+ },
+ "rotated_options": {
+  "data": "data_rotated",
+  "params": {
+   "samples_file": "samples.csv",
+   "blocks_file": "blocks.csv",
+   "header_file": "header.txt",
+   "samples": {
+    "value": "cut",
+    "ue": "uecu",
+    "x": "midx",
+    "y": "midy",
+    "z": "midz",
+    "length": "length"
+   },
+   "blocks": {
+    "value": "cu",
+    "ue": "ue",
+    "x": "xcentre",
+    "y": "ycentre",
+    "z": "zcentre",
+    "dx": "xlength",
+    "dy": "ylength",
+    "dz": "zlength"
+   },
+   "project_name": "test",
+   "variable_label": "Cu",
+   "multiplier": [
+    5,
+    3,
+    2
+   ],
+   "value_min": 0.0,
+   "value_max": 0.9,
+   "min_samples": 3,
+   "min_blocks": 2
+  }
+ },
+ "unrotated_ue_filter": {
+  "data": "data_unrotated",
+  "params": {
+   "samples_file": "samples.csv",
+   "blocks_file": "blocks.csv",
+   "header_file": "header.txt",
+   "samples": {
+    "value": "cut",
+    "ue": "uecu",
+    "x": "midx",
+    "y": "midy",
+    "z": "midz",
+    "length": "length"
+   },
+   "blocks": {
+    "value": "cu",
+    "ue": "ue",
+    "x": "xcentre",
+    "y": "ycentre",
+    "z": "zcentre",
+    "dx": "xlength",
+    "dy": "ylength",
+    "dz": "zlength"
+   },
+   "project_name": "test",
+   "variable_label": "Cu",
+   "multiplier": [
+    4,
+    4,
+    2
+   ],
+   "value_min": 0.1,
+   "value_max": null,
+   "min_samples": 1,
+   "min_blocks": 1,
+   "ue_filter": [
+    "2",
+    "12"
+   ]
+  }
+ }
+}

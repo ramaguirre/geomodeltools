@@ -11,6 +11,7 @@ Reusable helpers for 3D geological modeling workflows.
 - Leapfrog colour files (.lfc) and ArcGIS symbology readers (`geomodeltools.colour`).
 - Basin base surfaces for sedimentary cover (`geomodeltools.basin`, see below).
 - Unit colours from the ICS/CGMW chart with a CIEDE2000 distinguishability check (`geomodeltools.palette`, `docs/unit_colours.md`).
+- Swath (drift) analysis, blocks against composites by panel and estimation unit (`geomodeltools.swath`, contract in `docs/swath_contract.md`); the browser tool `swath_local` is checked against the same golden data.
 - Contact orientation from outcrop traces, the rule of V's as a plane fit (`geomodeltools.contacts`, `docs/contact_orientation.md`).
 
 - Quick EDA and contact plots for numeric and categorical unit attributes (`quick_eda`,
