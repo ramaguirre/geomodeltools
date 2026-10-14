@@ -1,14 +1,15 @@
 {
  "contract_version": 1,
  "source": "geomodeltools (Python reference)",
- "geomodeltools_commit": "5c7b02a",
+ "geomodeltools_commit": "d169772",
  "sha256": {
-  "cases.json": "a9166f7673efa1df3de2761f137fab6f2dbcddcd298c03ec6d20021a8668b8c0",
+  "cases.json": "e97f6aec52d3efc57415a2b1f83f5d2ad1b4e7f3c6b469508a50e70553caef4c",
   "collars.csv": "efb1610449fd7fd0e66452653af8d49f0256bb8461e9f187a4656696d7ba2a59",
   "collars_neg.csv": "9ed33e35e5843199bac798c5fe0f378b3d1f39f76ed3d79414eb4593b58a61c4",
   "expected/duplicates_first.json": "05713a33a2b1f9350af3ca80d0db17b2cc8d65c65d82a943522f11d1f2a5cbcf",
   "expected/duplicates_last.json": "47bab594cc2a0433d9c438a69b676bb4509d3c6f36ceaefd903bad1918127eab",
   "expected/negative_down_skip.json": "7b84c40d218e78c9e6a5933928688b91897b307f6a59b3e093e5db8f1d46878b",
+  "expected/pipeline_contact_from_drillholes.json": "6d94fbf817f8a0f73fd1ab0279e84745efde66e52bd263f83af55d9d85c9f2cb",
   "expected/positive_down_skip.json": "7b84c40d218e78c9e6a5933928688b91897b307f6a59b3e093e5db8f1d46878b",
   "expected/traces_every_25.json": "cdb951f3a8cb7224fc84565b5963afa34df887e3be9b975fc8143c679b8cd9ce",
   "intervals.csv": "3f2e9675342b07da1110d662de7bc2b2297c2301934ec7445b2d1ef4ab0ea6a2",

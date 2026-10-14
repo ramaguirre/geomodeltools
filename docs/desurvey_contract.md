@@ -36,7 +36,7 @@ Positions: 1e-8 m absolute plus 1e-12 relative. Everything else (holes, depths, 
 and reasons) must be identical.
 
 ## Not in the contract (version 1)
-De-duplication by a function, the dogleg-severity and trace-vertex helpers (`dogleg_severity`, `trace_depths`), and the choice of
+A distance that falls exactly on a bin edge (neighbouring intervals of one hole are often exactly 2, 3 or 4 m apart): two correct implementations can put it in different bins because they differ by 1e-12, so the golden pipeline case uses a bin width (1.37 m) that keeps the edges away from such values. De-duplication by a function, the dogleg-severity and trace-vertex helpers (`dogleg_severity`, `trace_depths`), and the choice of
 column names by pattern.
 
 ## Golden data

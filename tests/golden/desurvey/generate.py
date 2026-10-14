@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 import geomodeltools
+from geomodeltools import report
 from geomodeltools.desurvey import desurvey_intervals
 
 HERE = Path(__file__).resolve().parent
@@ -134,7 +135,21 @@ def main() -> None:
                        "intervals": "intervals.csv" if c.get("intervals", True) else None, "columns": COLS,
                        "dip_positive_down": c["dip_positive_down"], "duplicates": c["duplicates"],
                        "trace_step": c.get("trace_step", 10.0)}
-    (HERE / "cases.json").write_text(json.dumps({"cases": cases}, indent=1), encoding="utf-8")
+    # the whole pipeline of the page: desurvey the intervals, take their midpoints as coordinates, draw a contact between two units
+    co, su, iv = pd.read_csv(HERE / "collars.csv"), pd.read_csv(HERE / "surveys.csv"), pd.read_csv(HERE / "intervals.csv")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = desurvey_intervals(co, su, iv, warn=False, **COLS, dip_positive_down=True, duplicates="skip")
+    kept = iv.iloc[res.intervals["_row"].to_numpy()].reset_index(drop=True)
+    for a in "xyz":
+        kept[f"mid_{a}"] = res.intervals[f"mid_{a}"].to_numpy()
+    pipeline = {"numeric": [], "categorical": [], "weight": None, "contacts": [
+        {"coords": ["mid_x", "mid_y", "mid_z"], "unit": "lith", "inside": "A", "outside": "B", "value": "cu", "category": "lith", "bin_width": 1.37}]}
+    # 1.37 m: neighbouring intervals sit exactly 2, 3 or 4 m apart, and a bin edge there would put a sample in the next bin for a 1e-12 difference
+    payload = report._nan_to_none(report.build_report(kept, **pipeline))
+    (HERE / "expected" / "pipeline_contact_from_drillholes.json").write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    (HERE / "cases.json").write_text(json.dumps({"cases": cases, "pipeline": {"desurvey": "positive_down_skip", "report": pipeline,
+                                                                              "expected": "pipeline_contact_from_drillholes.json"}}, indent=1), encoding="utf-8")
     commit = subprocess.run(["git", "-C", str(Path(geomodeltools.__file__).resolve().parents[2]), "rev-parse", "--short", "HEAD"],
                             capture_output=True, text=True).stdout.strip()
     files = sorted(p for p in HERE.rglob("*") if p.is_file() and p.name not in ("MANIFEST.json", "generate.py") and "__pycache__" not in p.parts)

@@ -110,5 +110,29 @@
    "duplicates": "skip",
    "trace_step": 25.0
   }
+ },
+ "pipeline": {
+  "desurvey": "positive_down_skip",
+  "report": {
+   "numeric": [],
+   "categorical": [],
+   "weight": null,
+   "contacts": [
+    {
+     "coords": [
+      "mid_x",
+      "mid_y",
+      "mid_z"
+     ],
+     "unit": "lith",
+     "inside": "A",
+     "outside": "B",
+     "value": "cu",
+     "category": "lith",
+     "bin_width": 1.37
+    }
+   ]
+  },
+  "expected": "pipeline_contact_from_drillholes.json"
  }
 }

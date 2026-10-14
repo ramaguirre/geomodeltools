@@ -54,6 +54,32 @@ def test_python_reproduces_the_golden_positions(case):
                 assert g == v, (k, g, v)
 
 
+def test_pipeline_desurvey_then_contact_reproduces_the_golden_payload():
+    from geomodeltools import report
+    spec = json.loads((GOLDEN / "cases.json").read_text(encoding="utf-8"))["pipeline"]
+    c = CASES[spec["desurvey"]]["columns"]
+    co, su, iv = (pd.read_csv(GOLDEN / "collars.csv"), pd.read_csv(GOLDEN / "surveys.csv"), pd.read_csv(GOLDEN / "intervals.csv"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = desurvey_intervals(co, su, iv, warn=False, hole=c["hole"], xyz=c["xyz"], length=c["length"], at=c["at"],
+                                 azimuth=c["azimuth"], dip=c["dip"], from_=c["from_"], to=c["to"])
+    kept = iv.iloc[res.intervals["_row"].to_numpy()].reset_index(drop=True)
+    for a in "xyz":
+        kept[f"mid_{a}"] = res.intervals[f"mid_{a}"].to_numpy()
+    got = json.loads(json.dumps(report._nan_to_none(report.build_report(kept, **spec["report"]))))
+    want = json.loads((GOLDEN / "expected" / spec["expected"]).read_text(encoding="utf-8"))
+    assert got["contacts"][0]["label"] == want["contacts"][0]["label"] == "A / B"
+    for key in ("profile", "composition"):
+        for k, vals in want["contacts"][0][key].items():
+            g = got["contacts"][0][key][k]
+            if isinstance(vals, list):
+                flat = lambda x: [y for z in x for y in (z if isinstance(z, list) else [z])]
+                for a, b in zip(flat(g), flat(vals)):
+                    assert a == b or (a is not None and b is not None and math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-9)), (key, k, a, b)
+            else:
+                assert g == vals
+
+
 def test_positive_and_negative_down_tables_give_the_same_positions():
     a = json.loads((GOLDEN / "expected" / "positive_down_skip.json").read_text(encoding="utf-8"))["intervals"]
     b = json.loads((GOLDEN / "expected" / "negative_down_skip.json").read_text(encoding="utf-8"))["intervals"]
