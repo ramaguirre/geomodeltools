@@ -1,0 +1,73 @@
+{
+ "data": "data.csv",
+ "cases": {
+  "eda_weighted": {
+   "numeric": [
+    "cu",
+    "au"
+   ],
+   "categorical": [
+    "alt",
+    "zone"
+   ],
+   "weight": "len"
+  },
+  "eda_unweighted": {
+   "numeric": [
+    "cu"
+   ],
+   "categorical": [
+    "lith",
+    "alt"
+   ],
+   "weight": null
+  },
+  "contact_default": {
+   "numeric": [],
+   "categorical": [],
+   "weight": "len",
+   "contacts": [
+    {
+     "coords": [
+      "x",
+      "y",
+      "z"
+     ],
+     "unit": "lith",
+     "inside": "A",
+     "outside": "B",
+     "contact": "D",
+     "value": "cu",
+     "category": "alt"
+    }
+   ]
+  },
+  "contact_options": {
+   "numeric": [],
+   "categorical": [],
+   "weight": null,
+   "contacts": [
+    {
+     "coords": [
+      "x",
+      "y",
+      "z"
+     ],
+     "unit": "lith",
+     "inside": [
+      "A"
+     ],
+     "outside": [
+      "B",
+      "C"
+     ],
+     "bin_width": 5,
+     "n_bins": 8,
+     "value": "au",
+     "category": "zone",
+     "label": "custom"
+    }
+   ]
+  }
+ }
+}

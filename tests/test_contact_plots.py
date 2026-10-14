@@ -117,3 +117,14 @@ def test_plot_functions_accept_an_existing_axes():
     fig2, ax2 = plt.subplots()
     returned2 = plot_contact_composition(df, distance, "unit", bin_width=3, n_bins=4, ax=ax2)
     assert returned2 is fig2
+
+
+def test_composition_leaves_out_samples_beyond_the_outer_bins():
+    import numpy as np
+    import pandas as pd
+    from geomodeltools.contact_plots import contact_composition
+
+    df = pd.DataFrame({"cat": ["a", "b", "a", "b", "a", "b"], "d": [-30.0, -3.0, -1.0, 1.0, 3.0, 30.0]})
+    out = contact_composition(df, "d", "cat", bin_width=2.0, n_bins=4)
+    assert out["n"].sum() == 4                      # the two samples at +-30 are outside [-4, 4]
+    assert list(out["mid"]) == [-3.0, -1.0, 1.0, 3.0]

@@ -1,0 +1,13 @@
+{
+ "contract_version": 1,
+ "source": "geomodeltools (Python reference)",
+ "geomodeltools_commit": "19f3493",
+ "sha256": {
+  "cases.json": "75d68db3f6be4aabbeada1522c2ba93aef6b134dcfd426da52aafa82a484536b",
+  "data.csv": "705362825354f57ea7540ed9c54cb5f748f3894ab6dfad9fe30a7d92a1dc0572",
+  "expected/contact_default.json": "78135e7362bb3b9107b8aeb8408dd29d770e80c9f0781d77a74a15607324c423",
+  "expected/contact_options.json": "23346396b8b06bb4da9253cdb7dd194b2016c54cde936e23b262234fcc8e64d7",
+  "expected/eda_unweighted.json": "46d5be47d6f299ef1ad6c180b47d9bdb44cca3832eafab928b547c638ba68423",
+  "expected/eda_weighted.json": "12aca8a49b8dc1cfa8bf575f6a060e9dc473c99e12b57f770adbea59eaa06701"
+ }
+}

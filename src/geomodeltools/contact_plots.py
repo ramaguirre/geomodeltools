@@ -238,6 +238,9 @@ def contact_composition(
         raise ValueError("No rows with both a distance and a category to profile.")
 
     bins = pd.cut(d, _bin_edges(d, bin_width, n_bins))
+    in_range = bins.notna().to_numpy()   # samples beyond the outer bin edges are left out (as in contact_profile)
+    if not in_range.all():
+        bins, c, w = bins[in_range], c[in_range], w[in_range]
     table = pd.crosstab(bins, c, values=w.to_numpy(), aggfunc="sum", dropna=False).fillna(0.0)
 
     n = table.sum(axis=1)

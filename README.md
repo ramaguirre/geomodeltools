@@ -16,6 +16,7 @@ Reusable helpers for 3D geological modeling workflows.
 
 - Quick EDA and contact plots for numeric and categorical unit attributes (`quick_eda`,
   `categorical_eda`, `cat_vs_cat`, `contact_plot`; module `geomodeltools.contact_plots`, not to be confused with `geomodeltools.contacts`, the rule-of-V orientation), also from the command line.
+- The EDA and contact payloads are a contract (`docs/plots_contract.md`) with golden data; the browser tool `geoplots_local` reproduces them in JavaScript.
 - A self-contained, interactive HTML report of the same plots (`write_html`): open it in
   any browser, no server, no Node, nothing to install.
 
