@@ -5,6 +5,7 @@ from .geometry import (
     geometries_to_points,
 )
 from .dem import add_z_from_opentopography, download_opentopography_dem
+from .collars import block_model_bounds, collars_from_latlon, dem_for_block_model, latlon_to_xy, sample_dem_z
 from .colour import (
     cim_color_to_rgb,
     cim_symbol_color,
@@ -35,6 +36,11 @@ __all__ = [
     "geometries_to_points",
     "add_z_from_opentopography",
     "download_opentopography_dem",
+    "block_model_bounds",
+    "collars_from_latlon",
+    "dem_for_block_model",
+    "latlon_to_xy",
+    "sample_dem_z",
     "cim_color_to_rgb",
     "cim_symbol_color",
     "read_mapx_symbology",

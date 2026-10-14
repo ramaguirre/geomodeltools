@@ -309,7 +309,10 @@ def download_opentopography_dem(
                 src.crs, target_crs, src.width, src.height, *src.bounds
             )
             profile = src.profile.copy()
-            profile.update(crs=target_crs, transform=transform, width=width, height=height)
+            # the reprojected grid is larger than the data: mark the fill as nodata, never as elevation 0
+            nodata = src.nodata if src.nodata is not None else (
+                -32768 if np.issubdtype(np.dtype(src.dtypes[0]), np.integer) else -9999.0)
+            profile.update(crs=target_crs, transform=transform, width=width, height=height, nodata=nodata)
 
             with rasterio.open(out_tiff_path, "w", **profile) as dst:
                 for band in range(1, src.count + 1):
@@ -320,6 +323,8 @@ def download_opentopography_dem(
                         src_crs=src.crs,
                         dst_transform=transform,
                         dst_crs=target_crs,
+                        src_nodata=src.nodata,
+                        dst_nodata=nodata,
                         resampling=Resampling[resampling],
                     )
     finally:
