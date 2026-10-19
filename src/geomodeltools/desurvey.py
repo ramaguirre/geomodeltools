@@ -42,6 +42,14 @@ FROM_CANDIDATES = ["FROM", "MFROM", "DESDE"]
 TO_CANDIDATES = ["TO", "MTO", "HASTA"]
 
 
+def _collar_column(collars, given, candidates, what):
+    """The collar's own direction column, or None. A name given for the *survey's* columns (``azimuth="BRG"``) may not exist in the
+    collar table, which usually has no direction columns at all: then the usual names are tried instead of failing."""
+    if given is not None and given in collars.columns:
+        return given
+    return find_column(collars, None, candidates, what, required=False)
+
+
 def directions(azimuth, dip) -> np.ndarray:
     """Unit direction vectors (east, north, up) for azimuth/dip in degrees (dip < 0 = down)."""
     az, dp = np.radians(np.asarray(azimuth, float)), np.radians(np.asarray(dip, float))
@@ -164,8 +172,8 @@ def check_tables(collars: pd.DataFrame, surveys: pd.DataFrame | None = None, int
     Leapfrog also warns about "wedge" holes and "duplicate collar and surveys"; geoview does not check those.
     """
     hole_c = find_column(collars, hole, HOLE_CANDIDATES, "hole id")
-    c_az = find_column(collars, azimuth, AZIMUTH_CANDIDATES, "collar azimuth", required=False)
-    c_dip = find_column(collars, dip, DIP_CANDIDATES, "collar dip", required=False)
+    c_az = _collar_column(collars, azimuth, AZIMUTH_CANDIDATES, "collar azimuth")
+    c_dip = _collar_column(collars, dip, DIP_CANDIDATES, "collar dip")
     c_len = find_column(collars, length, LENGTH_CANDIDATES, "hole length", required=False)
 
     ch = collars[hole_c].to_numpy()
@@ -255,8 +263,8 @@ def _prepare(collars, surveys, intervals, *, hole, xyz, length, at, azimuth, dip
     if not xyz_c:
         raise ValueError(f"could not find collar X/Y/Z in {list(collars.columns)}; pass xyz=")
     sign = -1.0 if dip_positive_down else 1.0
-    c_az = find_column(collars, azimuth, AZIMUTH_CANDIDATES, "collar azimuth", required=False)
-    c_dip = find_column(collars, dip, DIP_CANDIDATES, "collar dip", required=False)
+    c_az = _collar_column(collars, azimuth, AZIMUTH_CANDIDATES, "collar azimuth")
+    c_dip = _collar_column(collars, dip, DIP_CANDIDATES, "collar dip")
     c_len = find_column(collars, length, LENGTH_CANDIDATES, "hole length", required=False)
 
     report = check_tables(collars, surveys, intervals, hole=hole, length=length, at=at, azimuth=azimuth,

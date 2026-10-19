@@ -156,3 +156,35 @@ def test_holes_without_intervals_are_cut_every_trace_step():
     r = desurvey_intervals(c, trace_step=10, **NEG)
     assert list(r.intervals["FROM"]) == [0, 10, 20] and list(r.intervals["TO"]) == [10, 20, 25]
     assert (r.intervals["_row"] == -1).all()
+
+
+def _plain_tables(collar_extra=None):
+    c = pd.DataFrame({"HOLEID": ["A"], "X": [0.0], "Y": [0.0], "Z": [0.0], "LENGTH": [100.0]})
+    for k, v in (collar_extra or {}).items():
+        c[k] = v
+    s = pd.DataFrame({"HOLEID": ["A", "A"], "AT": [0.0, 100.0], "BRG": [90.0, 90.0], "INCL": [-60.0, -60.0]})
+    i = pd.DataFrame({"HOLEID": ["A"], "FROM": [0.0], "TO": [10.0]})
+    return c, s, i
+
+
+def test_explicit_azimuth_and_dip_names_may_exist_only_in_the_survey():
+    """The names given for the survey's direction columns used to be looked up in the collars too, and failed there
+    (KeyError: collar azimuth column 'BRG' not in [...]) when the collar table has no direction columns."""
+    c, s, i = _plain_tables()
+    r = desurvey_intervals(c, s, i, azimuth="BRG", dip="INCL", at="AT", **NEG)
+    assert len(r.intervals) == 1 and r.skipped.empty
+    np.testing.assert_allclose(r.intervals[["end_x", "end_y", "end_z"]].to_numpy()[-1],
+                               [10 * np.cos(np.radians(60)), 0, -10 * np.sin(np.radians(60))], atol=1e-9)
+    assert check_tables(c, s, i, azimuth="BRG", dip="INCL", at="AT").empty
+
+
+def test_explicit_direction_names_present_in_the_collar_still_orient_a_hole_without_survey():
+    c, _, i = _plain_tables({"BRG": 90.0, "INCL": 0.0})
+    r = desurvey_intervals(c, None, i, azimuth="BRG", dip="INCL", **NEG)      # east, horizontal
+    np.testing.assert_allclose(r.intervals[["end_x", "end_y", "end_z"]].to_numpy()[-1], [10, 0, 0], atol=1e-9)
+
+
+def test_an_explicit_name_in_neither_table_is_still_an_error():
+    c, s, i = _plain_tables()
+    with pytest.raises(KeyError, match="NOPE"):
+        desurvey_intervals(c, s, i, azimuth="NOPE", dip="INCL", at="AT", **NEG)
