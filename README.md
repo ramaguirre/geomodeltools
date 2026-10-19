@@ -25,7 +25,7 @@ Reusable helpers for 3D geological modeling workflows.
 From GitHub (a fixed version, no Git needed):
 
 ```bash
-pip install https://github.com/ramaguirre/geomodeltools/archive/refs/tags/v0.5.0.zip
+pip install https://github.com/ramaguirre/geomodeltools/archive/refs/tags/v0.6.1.zip
 ```
 
 For development, from a clone of this repo:
