@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geomodeltools"
-version = "0.6.1"
-description = "Utilities for 3D geological modeling: drillhole desurvey, swath and EDA tools, colours, geometry and DEM workflows."
+version = "0.7.0"
+description = "Utilities for 3D geological modeling: drillhole desurvey, depth tables and 3D export (OMF, DXF, OBJ), swath and EDA tools, colours, geometry and DEM workflows."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
