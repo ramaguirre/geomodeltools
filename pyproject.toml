@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geomodeltools"
-version = "0.6.1"
-description = "Utilities for 3D geological modeling: drillhole desurvey, swath and EDA tools, colours, geometry and DEM workflows."
+version = "0.7.0"
+description = "Utilities for 3D geological modeling: drillhole desurvey, depth tables and 3D export (OMF, DXF, OBJ), swath and EDA tools, colours, geometry and DEM workflows."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
@@ -18,15 +18,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# the base install is light (desurvey, swath, palette, contacts, colour files); each group below adds what its tools need
+# the base install is light (desurvey, depth tables, OMF/OBJ/CSV export, swath, palette, contacts, colour files);
+# each group below adds what its tools need
 geo = ["geopandas>=0.14", "shapely>=2.0", "rasterio>=1.3", "requests>=2.31"]   # geometry, DEM
 plots = ["scipy>=1.10", "matplotlib>=3.7"]                                      # EDA, contact plots, report, soft boundaries
 basin = ["scipy>=1.10", "triangle>=20230923", "matplotlib>=3.7"]
+dxf = ["ezdxf>=1.1"]                                                           # DXF export
 viz = ["pyvista>=0.43"]
 all = ["geopandas>=0.14", "shapely>=2.0", "rasterio>=1.3", "requests>=2.31", "scipy>=1.10", "matplotlib>=3.7",
-       "triangle>=20230923"]
-dev = ["pytest>=7", "geopandas>=0.14", "shapely>=2.0", "rasterio>=1.3", "requests>=2.31", "scipy>=1.10", "matplotlib>=3.7",
-       "triangle>=20230923"]
+       "triangle>=20230923", "ezdxf>=1.1"]
+# omf (the reference OMF v1 reader) is a test dependency only: geomodeltools writes and reads OMF itself
+dev = ["pytest>=7", "omf>=1.0.1,<2", "geopandas>=0.14", "shapely>=2.0", "rasterio>=1.3", "requests>=2.31", "scipy>=1.10",
+       "matplotlib>=3.7", "triangle>=20230923", "ezdxf>=1.1"]
 
 [project.scripts]
 geomodeltools-eda = "geomodeltools.cli:eda_main"

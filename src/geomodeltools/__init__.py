@@ -23,10 +23,14 @@ _LAZY = {
     "build_report": "report", "write_html": "report",
     "plot_soft_boundary_boxplots": "soft_boundary", "soft_boundary_pairs": "soft_boundary", "soft_boundary_values": "soft_boundary",
     "Desurveyed": "desurvey", "desurvey_intervals": "desurvey",
+    "interval_table": "drillholes", "point_table": "drillholes", "traces": "drillholes", "Polyline": "shapes",
+    "PointSet": "shapes", "LineSet": "shapes", "Surface": "shapes", "write_omf": "omf_io", "read_omf": "omf_io",
+    "write_dxf": "export", "write_obj": "export", "write_csv": "export", "dxf_layer_name": "export",
     "latlon_to_xy": "collars", "block_model_bounds": "collars", "dem_for_block_model": "collars", "sample_dem_z": "collars",
     "collars_from_latlon": "collars",
 }
-_EXTRA = {"geopandas": "geo", "shapely": "geo", "rasterio": "geo", "requests": "geo", "scipy": "plots", "matplotlib": "plots"}
+_EXTRA = {"geopandas": "geo", "shapely": "geo", "rasterio": "geo", "requests": "geo", "scipy": "plots", "matplotlib": "plots",
+          "ezdxf": "dxf"}
 
 __all__ = sorted(_LAZY)
 

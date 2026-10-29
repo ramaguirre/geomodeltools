@@ -12,6 +12,8 @@ Reusable helpers for 3D geological modeling workflows.
 - Basin base surfaces for sedimentary cover (`geomodeltools.basin`, see below).
 - Unit colours from the ICS/CGMW chart with a CIEDE2000 distinguishability check (`geomodeltools.palette`, `docs/unit_colours.md`).
 - Swath (drift) analysis, blocks against composites by panel and estimation unit (`geomodeltools.swath`, contract in `docs/swath_contract.md`); the browser tool `swath_local` is checked against the same golden data.
+- Drillhole depth tables and traces in real coordinates, OMF v1 files written and read with no extra dependency, and DXF / OBJ /
+  CSV export (`geomodeltools.drillholes`, `geomodeltools.omf_io`, `geomodeltools.export`, see below).
 - Contact orientation from outcrop traces, the rule of V's as a plane fit (`geomodeltools.contacts`, `docs/contact_orientation.md`).
 
 - Quick EDA and contact plots for numeric and categorical unit attributes (`quick_eda`,
@@ -127,6 +129,44 @@ repeats values.
 By default, `add_z_from_opentopography` assumes PSAD56 / UTM zone 19S
 (EPSG:24879) for inputs with no CRS set, and writes the DEM GeoTIFF in that
 same CRS. Pass `crs=...` to target a different UTM zone or datum.
+
+## Drillhole tables, traces and 3D export
+
+Plain library code for notebooks and apps: desurveyed depth tables, drillhole traces as polylines, and files a 3D package
+opens. numpy and pandas only, except DXF (`pip install geomodeltools[dxf]`, which adds ezdxf).
+
+```python
+from geomodeltools import (interval_table, point_table, traces, LineSet, PointSet, write_omf, read_omf,
+                           write_dxf, write_obj, write_csv)
+
+# HOLEID, FROM, TO, the interval columns, then TOP_X/Y/Z, MID_X/Y/Z, BOTTOM_X/Y/Z
+assays = interval_table(collars, surveys, intervals)
+# HOLEID, DEPTH, the point columns, then X, Y, Z (for a table of depths along the holes)
+structures = point_table(collars, surveys, picks, depth="MD")
+write_csv("assays_xyz.csv", assays)
+
+holes = traces(collars, surveys)                     # one Polyline per hole, named by hole id
+write_omf("project.omf", [
+    LineSet.from_polylines("drillholes", holes, names_as="HOLEID"),  # all traces in one line set, each segment tagged with its hole
+    PointSet("assay midpoints", assays[["MID_X", "MID_Y", "MID_Z"]], {"cu": assays["CU"]}),
+], name="project", units="m")
+elements = read_omf("project.omf")                   # PointSet / LineSet / Surface objects
+write_dxf("traces.dxf", holes)                       # 3D polylines, one layer per hole (layer="..." for one layer)
+write_obj("traces.obj", holes)                       # OBJ "l" lines; a Surface becomes "f" faces in both
+```
+
+Column names are found as in `desurvey_intervals` (or passed: `hole=`, `xyz=`, `at=`, `from_=`, ...), and so is the dip:
+`dip_positive_down=True` by default, as in Leapfrog's survey export; pass `dip_positive_down=False` for tables that store dip
+negative-down. Holes that cannot be placed (no survey and no direction on the collar, a repeated survey depth) are left out with a
+warning, never guessed.
+
+`Polyline` is a name and N x 3 float64 vertices; `PointSet`, `LineSet` and `Surface` are the same idea for points (with scalar
+data), segments (with numbers or text per segment) and triangles. A merged line set keeps which polyline each segment came from
+(`names_as`, written as OMF text data on segments), so `to_polylines()`, DXF and OBJ export, and other packages reading the file
+still tell the holes apart. Everything stays in real coordinates: float64 keeps well under a millimetre at UTM magnitudes.
+`write_omf` writes OMF v1 (the format of the `omf` 1.x package, which Leapfrog Geo and other packages import): a 60-byte header,
+zlib-compressed arrays and a JSON index. The tests check that the `omf` package itself opens these files; it is a test
+dependency only.
 
 ## Basin base surfaces (`geomodeltools.basin`)
 
