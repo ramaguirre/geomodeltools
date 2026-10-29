@@ -23,6 +23,7 @@ _LAZY = {
     "build_report": "report", "write_html": "report",
     "plot_soft_boundary_boxplots": "soft_boundary", "soft_boundary_pairs": "soft_boundary", "soft_boundary_values": "soft_boundary",
     "Desurveyed": "desurvey", "desurvey_intervals": "desurvey",
+    "interval_table": "drillholes", "point_table": "drillholes",
     "latlon_to_xy": "collars", "block_model_bounds": "collars", "dem_for_block_model": "collars", "sample_dem_z": "collars",
     "collars_from_latlon": "collars",
 }
