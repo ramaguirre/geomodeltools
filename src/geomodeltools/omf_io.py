@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .shapes import LineSet, PointSet, Polyline, Surface
+from .shapes import LineSet, PointSet, Polyline, Surface, _segment_values
 
 MAGIC = b"\x84\x83\x82\x81"
 VERSION = b"OMF-v0.9.0"
@@ -54,7 +54,11 @@ class _Writer:
         if isinstance(e, LineSet):
             geometry = self.add("LineSetGeometry", origin=[0.0, 0.0, 0.0], vertices=vertices,
                                 segments=self.array("Int2Array", e.segments, "<i8"))
-            return self.add("LineSetElement", **common, data=[], subtype="line", geometry=geometry)
+            data = [self.add("StringData", name=k, description="", location="segments", array=self.add("StringArray", array=list(v)))
+                    if v.dtype == object else
+                    self.add("ScalarData", name=k, description="", array=self.array("ScalarArray", v, "<f8"), location="segments")
+                    for k, v in ((k, _segment_values(v)) for k, v in e.data.items())]  # values set after the line set was made, too
+            return self.add("LineSetElement", **common, data=data, subtype="line", geometry=geometry)
         geometry = self.add("SurfaceGeometry", origin=[0.0, 0.0, 0.0], vertices=vertices,
                             triangles=self.array("Int3Array", e.triangles, "<i8"))
         return self.add("SurfaceElement", **common, data=[], textures=[], subtype="surface", geometry=geometry)
@@ -89,8 +93,8 @@ def write_omf(path, elements, *, name: str = "", description: str = "", units: s
 
 def read_omf(path) -> list:
     """The point sets, line sets and triangulated surfaces of an OMF v1 file, in project order, as `PointSet`, `LineSet` and
-    `Surface` objects in real coordinates (the project and geometry origins added). A point set keeps its scalar data on vertices;
-    other data, and elements of other kinds (volumes, gridded surfaces), are left out with a warning."""
+    `Surface` objects in real coordinates (the project and geometry origins added). A point set keeps its scalar data on vertices,
+    a line set its scalar and text data on segments (e.g. which hole each trace segment belongs to); other data, and elements of other kinds (volumes, gridded surfaces), are left out with a warning."""
     raw = Path(path).read_bytes()
     if raw[:4] != MAGIC:
         raise ValueError(f"{path} is not an OMF file")
@@ -126,11 +130,19 @@ def read_omf(path) -> list:
                     left_out.append(f"data {d.get('name', '')!r} of {name!r} ({d['__class__']})")
             out.append(PointSet(name, vertices, data))
         elif cls == "LineSetElement":
-            out.append(LineSet(name, vertices, array(g["segments"], 2)))
+            data = {}
+            for d in map(index.get, e.get("data", [])):
+                if d["__class__"] == "ScalarData" and d.get("location") == "segments":
+                    data[d["name"]] = array(d["array"], 0)
+                elif d["__class__"] == "StringData" and d.get("location") == "segments":
+                    data[d["name"]] = np.array(index[d["array"]]["array"], dtype=object)
+                else:
+                    left_out.append(f"data {d.get('name', '')!r} of {name!r} ({d['__class__']})")
+            out.append(LineSet(name, vertices, array(g["segments"], 2), data))
         else:
             out.append(Surface(name, vertices, array(g["triangles"], 3)))
-        if cls != "PointSetElement" and e.get("data"):
-            left_out.append(f"the data of {name!r}")
+            if e.get("data"):
+                left_out.append(f"the data of {name!r}")
     if left_out:
         warnings.warn(f"left out of {Path(path).name}: {', '.join(left_out)}", stacklevel=2)
     return out

@@ -147,7 +147,7 @@ write_csv("assays_xyz.csv", assays)
 
 holes = traces(collars, surveys)                     # one Polyline per hole, named by hole id
 write_omf("project.omf", [
-    LineSet.from_polylines("drillholes", holes),     # all traces in one line set (or pass the Polylines: one each)
+    LineSet.from_polylines("drillholes", holes, names_as="HOLEID"),  # all traces in one line set, each segment tagged with its hole
     PointSet("assay midpoints", assays[["MID_X", "MID_Y", "MID_Z"]], {"cu": assays["CU"]}),
 ], name="project", units="m")
 elements = read_omf("project.omf")                   # PointSet / LineSet / Surface objects
@@ -161,7 +161,9 @@ negative-down. Holes that cannot be placed (no survey and no direction on the co
 warning, never guessed.
 
 `Polyline` is a name and N x 3 float64 vertices; `PointSet`, `LineSet` and `Surface` are the same idea for points (with scalar
-data), segments and triangles. Everything stays in real coordinates: float64 keeps well under a millimetre at UTM magnitudes.
+data), segments (with numbers or text per segment) and triangles. A merged line set keeps which polyline each segment came from
+(`names_as`, written as OMF text data on segments), so `to_polylines()`, DXF and OBJ export, and other packages reading the file
+still tell the holes apart. Everything stays in real coordinates: float64 keeps well under a millimetre at UTM magnitudes.
 `write_omf` writes OMF v1 (the format of the `omf` 1.x package, which Leapfrog Geo and other packages import): a 60-byte header,
 zlib-compressed arrays and a JSON index. The tests check that the `omf` package itself opens these files; it is a test
 dependency only.

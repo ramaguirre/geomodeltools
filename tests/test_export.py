@@ -26,7 +26,7 @@ def test_dxf_polylines_are_3d_polylines_and_surfaces_3d_faces(tmp_path):
     msp = ezdxf.readfile(path).modelspace()
     polys = msp.query("POLYLINE")
     assert len(polys) == 3 and all(p.is_3d_polyline for p in polys)
-    assert [p.dxf.layer for p in polys] == ["DDH-001", "traces_1", "traces_2"]
+    assert [p.dxf.layer for p in polys] == ["DDH-001", "A", "B"]
     np.testing.assert_allclose([tuple(v.dxf.location) for v in polys[0].vertices], hole.vertices, rtol=0, atol=1e-9)
     faces = msp.query("3DFACE")
     assert len(faces) == 2 and {f.dxf.layer for f in faces} == {"topo surface"}
@@ -65,9 +65,9 @@ def _read_obj(path):
 def test_obj_lines_and_faces_in_full_precision(tmp_path):
     hole, traces, surf = _shapes()
     objs, v = _read_obj(write_obj(tmp_path / "x.obj", [hole, traces, surf]))
-    assert list(objs) == ["DDH-001", "traces_1", "traces_2", "topo_surface"]
+    assert list(objs) == ["DDH-001", "A", "B", "topo_surface"]
     np.testing.assert_array_equal(v[objs["DDH-001"]["l"][0]], hole.vertices)          # exact: floats in full
-    np.testing.assert_array_equal(v[objs["traces_2"]["l"][0]], [[E + 5, N, 0], [E + 5, N, -5]])
+    np.testing.assert_array_equal(v[objs["B"]["l"][0]], [[E + 5, N, 0], [E + 5, N, -5]])
     np.testing.assert_array_equal(np.array(objs["topo_surface"]["f"]), surf.triangles + 7)  # after 3 + 2 + 2 line vertices
     np.testing.assert_array_equal(v[7:], surf.vertices)
 

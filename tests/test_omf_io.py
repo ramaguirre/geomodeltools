@@ -40,7 +40,8 @@ def test_round_trip_own_reader(tmp_path):
     np.testing.assert_array_equal(back[0].data["au"], [0, 1, 2, 3, 4])
     np.testing.assert_array_equal(back[1].segments, [[0, 1], [1, 2], [3, 4]])
     lines = back[1].to_polylines()
-    assert [p.name for p in lines] == ["traces_1", "traces_2"]
+    assert [p.name for p in lines] == ["A", "B"]                                  # named by the polyline each segment came from
+    assert [p.name for p in back[1].to_polylines(None)] == ["traces_1", "traces_2"]   # or after the line set
     np.testing.assert_array_equal(lines[0].vertices, [[E, N, 1000], [E, N, 900], [E + 10, N, 800]])
     (fault,) = back[2].to_polylines()
     assert fault.name == "fault"
@@ -104,3 +105,28 @@ def test_our_reader_opens_omf_package_files(tmp_path):
     np.testing.assert_array_equal(ls.segments, [[0, 1], [1, 2], [2, 3]])
     np.testing.assert_array_equal(sf.triangles, [[0, 1, 2], [1, 3, 2]])
     np.testing.assert_array_equal(sf.vertices, v + [E, N, 0.0])
+
+
+def test_merged_traces_keep_which_hole_each_segment_belongs_to(tmp_path):
+    _, traces, _, _ = _elements()
+    assert traces.data["name"].tolist() == ["A", "A", "B"]                   # one label per segment
+    holes = LineSet.from_polylines("traces", traces.to_polylines(), names_as="HOLEID")
+    holes.data["dip"] = [-90.0, -84.3, -84.3]                                 # numbers on segments travel too
+    path = write_omf(tmp_path / "t.omf", [holes])
+    (back,) = read_omf(path)
+    assert back.data["HOLEID"].tolist() == ["A", "A", "B"] and back.data["dip"].tolist() == [-90.0, -84.3, -84.3]
+    assert [(p.name, len(p.vertices)) for p in back.to_polylines("HOLEID")] == [("A", 3), ("B", 2)]
+    touching = LineSet("joined", [[0.0, 0, 0], [1, 0, 0], [2, 0, 0]], [[0, 1], [1, 2]], {"name": ["X", "Y"]})
+    assert [p.name for p in touching.to_polylines()] == ["X", "Y"]          # a change of name splits even where segments touch
+
+
+def test_the_omf_package_reads_the_hole_of_each_segment(tmp_path):
+    omf = pytest.importorskip("omf")
+    _, traces, _, _ = _elements()
+    path = write_omf(tmp_path / "t.omf", [LineSet.from_polylines("traces", traces.to_polylines(), names_as="HOLEID")])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        project = omf.OMFReader(str(path)).get_project()
+        project.validate()
+    (d,) = project.elements[0].data
+    assert (d.name, d.location, list(d.array.array)) == ("HOLEID", "segments", ["A", "A", "B"])
