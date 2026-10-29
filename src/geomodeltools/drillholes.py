@@ -1,7 +1,7 @@
 """Drillhole tables and traces in real coordinates, built on `desurvey` (numpy and pandas only).
 
 `interval_table` and `point_table` are the depth tables a 3D viewer or an export needs: one row per interval (or per point), with
-its position along the desurveyed hole. Column detection, the dip flag (``dip_positive_down``, True by default) and the handling of
+its position along the desurveyed hole; `traces` draws each hole as a `Polyline`. Column detection, the dip flag (``dip_positive_down``, True by default) and the handling of
 holes that cannot be placed are those of `desurvey_intervals`, which both wrap.
 """
 from __future__ import annotations
@@ -12,7 +12,9 @@ import numpy as np
 import pandas as pd
 
 from .columns import find_column
-from .desurvey import DEPTH_CANDIDATES, HOLE_CANDIDATES, desurvey_intervals
+from .desurvey import (DEPTH_CANDIDATES, HOLE_CANDIDATES, _prepare, _Prepared, _warn_left_out, desurvey, desurvey_intervals,
+                       trace_depths)
+from .shapes import Polyline
 
 INTERVAL_POSITIONS = {"start": "TOP", "mid": "MID", "end": "BOTTOM"}
 
@@ -64,3 +66,37 @@ def point_table(collars: pd.DataFrame, surveys: pd.DataFrame | None, points: pd.
                              duplicates=duplicates, warn=warn, stacklevel=3).intervals
     return pd.concat([out[["HOLEID"]], out["FROM"].rename("DEPTH"), out[extra],
                       out[["start_x", "start_y", "start_z"]].set_axis(["X", "Y", "Z"], axis=1)], axis=1)
+
+
+def traces(collars: pd.DataFrame, surveys: pd.DataFrame | None = None, *, hole: str | None = None,
+           xyz: Sequence[str] | None = None, length: str | None = None, at: str | None = None, azimuth: str | None = None,
+           dip: str | None = None, dip_positive_down: bool = True, duplicates="skip", max_sag: float = 0.05,
+           max_turn: float = 3.0, warn: bool = True) -> list[Polyline]:
+    """One `Polyline` per hole, from the collar to the end of the hole, named by the hole id (as text), in collar order.
+
+    The vertices are `trace_depths` (the collar, every survey station, the end, and extra vertices wherever the hole curves, so
+    the polyline is within ``max_sag`` metres of the desurveyed arc), placed by `desurvey`. A hole's end is its collar length,
+    else its deepest survey station. Column detection and ``dip_positive_down`` (True by default) are those of
+    `desurvey_intervals`; holes that cannot be placed, or have no length, are left out with a warning.
+    """
+    prep = _prepare(collars, surveys, None, hole=hole, xyz=xyz, length=length, at=at, azimuth=azimuth, dip=dip, from_=None,
+                    to=None, dip_positive_down=dip_positive_down, duplicates=duplicates)
+    skipped = dict(prep.skipped)
+    out = []
+    for _, c in collars.drop_duplicates(prep.hole_c).iterrows():   # duplicated collar row: first wins
+        hid = c[prep.hole_c]
+        if hid in skipped:
+            continue
+        if hid in prep.stations:
+            sd, az, dp = prep.stations[hid]
+        else:                                                      # the collar's own azimuth/dip (checked in _prepare)
+            sd, az, dp = np.array([0.0]), np.array([float(c[prep.c_az])]), np.array([prep.sign * float(c[prep.c_dip])])
+        total = float(c[prep.c_len]) if prep.c_len is not None and pd.notna(c[prep.c_len]) else float(sd.max())
+        if not np.isfinite(total) or total <= 0:
+            skipped[hid] = "no hole length"
+            continue
+        depths = trace_depths(sd, az, dp, total, max_sag=max_sag, max_turn=max_turn)
+        out.append(Polyline(str(hid), desurvey(c[list(prep.xyz_c)].to_numpy(float), sd, az, dp, depths)))
+    if warn:
+        _warn_left_out(_Prepared(**{**prep.__dict__, "skipped": skipped}))
+    return out
