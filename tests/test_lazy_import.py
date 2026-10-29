@@ -20,10 +20,10 @@ def test_unknown_name_is_an_attribute_error():
 def test_desurvey_and_swath_import_without_the_heavy_packages():
     code = (
         "import sys\n"
-        "for m in ('geopandas', 'shapely', 'rasterio', 'requests', 'scipy', 'matplotlib'):\n"
+        "for m in ('geopandas', 'shapely', 'rasterio', 'requests', 'scipy', 'matplotlib', 'ezdxf'):\n"
         "    sys.modules[m] = None            # an import of any of them now fails\n"
         "from geomodeltools import desurvey_intervals, Desurveyed, interval_table, point_table, traces, Polyline\n"
-        "from geomodeltools import PointSet, LineSet, Surface, write_omf, read_omf\n"
+        "from geomodeltools import PointSet, LineSet, Surface, write_omf, read_omf, write_dxf, write_obj, write_csv\n"
         "import geomodeltools.swath, geomodeltools.palette, geomodeltools.contacts, geomodeltools.columns\n"
         "print('ok')\n"
     )
