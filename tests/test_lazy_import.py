@@ -23,6 +23,7 @@ def test_desurvey_and_swath_import_without_the_heavy_packages():
         "for m in ('geopandas', 'shapely', 'rasterio', 'requests', 'scipy', 'matplotlib'):\n"
         "    sys.modules[m] = None            # an import of any of them now fails\n"
         "from geomodeltools import desurvey_intervals, Desurveyed, interval_table, point_table, traces, Polyline\n"
+        "from geomodeltools import PointSet, LineSet, Surface, write_omf, read_omf\n"
         "import geomodeltools.swath, geomodeltools.palette, geomodeltools.contacts, geomodeltools.columns\n"
         "print('ok')\n"
     )
