@@ -8,6 +8,9 @@ import pandas as pd
 XYZ_CANDIDATES = [
     ("X", "Y", "Z"), ("XC", "YC", "ZC"), ("XCENTRE", "YCENTRE", "ZCENTRE"), ("XCENTER", "YCENTER", "ZCENTER"),
     ("CENTROID_X", "CENTROID_Y", "CENTROID_Z"), ("EAST", "NORTH", "RL"), ("EASTING", "NORTHING", "ELEVATION"),
+    # Spanish (as Chilean and other Latin American tables write them; matched in any case, accents as written)
+    ("ESTE", "NORTE", "COTA"), ("ESTE", "NORTE", "ELEVACION"), ("ESTE", "NORTE", "ELEVACIÓN"), ("ESTE", "NORTE", "ELEV"),
+    ("ESTE", "NORTE", "Z"), ("ESTE_COLLAR", "NORTE_COLLAR", "COTA_COLLAR"),
 ]
 
 
