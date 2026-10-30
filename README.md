@@ -168,6 +168,33 @@ still tell the holes apart. Everything stays in real coordinates: float64 keeps 
 zlib-compressed arrays and a JSON index. The tests check that the `omf` package itself opens these files; it is a test
 dependency only.
 
+### Drillhole sets
+
+A set is one collar table, at most one survey table (without one, each hole is oriented by its collar's azimuth and dip), and
+any number of interval tables and depth-point tables, as Leapfrog Geo groups them. `group_tables` sorts loaded tables into sets
+by the holes they share, so two campaigns loaded together stay apart:
+
+```python
+from geomodeltools import DrillholeSet, group_tables, drillhole_role
+
+g = group_tables({"collars_2025": c1, "survey_2025": s1, "assays_2025": a1,
+                  "collars_2026": c2, "survey_2026": s2, "assays_2026": a2, "structures": st})
+g.sets          # two DrillholeSet, named after their collar tables, each with its survey, interval and point tables
+g.unsure        # tables it would not place by itself (why, and the share of their holes in each set's collars)
+g.other         # tables that are not drillhole data (e.g. free X/Y/Z points that carry a hole id)
+
+s = g.sets[0]
+s.add("lith", lith)                    # a table moved in by hand (its role from its columns, or role="points")
+s.remove("assays_2025")                # and out again
+s.desurvey()                           # every interval and point table in real coordinates (TOP/MID/BOTTOM X/Y/Z, or X/Y/Z)
+s.traces()                             # one Polyline per hole
+```
+
+`drillhole_role(df)` says what a table is from its columns: hole id + from + to are intervals; hole id + depth + azimuth + dip
+(no X/Y/Z) a survey; hole id + X/Y/Z with one row per hole collars; hole id + depth a point table (depth points along the
+holes). A table joins a set when at least half its holes are in the set's collars and clearly more than in any other set's; a
+second survey table for a set is never taken silently.
+
 ## Basin base surfaces (`geomodeltools.basin`)
 
 Builds, outside the modelling software, the base surface of a sedimentary basin (or a network of thin river-bed
