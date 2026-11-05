@@ -11,7 +11,7 @@ import pathlib
 from .schema import SetSpec
 
 _HEADER = ("# Drillhole set (geomodeltools). What each table is and what its columns are; no data. Paths are relative to this file.\n"
-           "# Open it with geomodeltools.DrillholeSet.open(path), or in geoview (Files > Open drillhole set).\n")
+           "# Open it with geomodeltools.DrillholeSet.open(path), or load it in geoview (Load, or Viewer.open_drillhole_set).\n")
 
 
 def _is_json(path: pathlib.Path) -> bool:
