@@ -299,9 +299,10 @@ def _role_guesses(df: pd.DataFrame, kind: str, found: dict, known_holes: set | N
             continue
         x = x.dropna()
         if r == "azimuth":
-            inside = x.between(0, 360).mean()
+            inside = x.between(-360, 360).mean()           # -27 is 333: both are written
             g[1] += 0.05 if inside == 1 else -0.4
-            g[2].append("values within 0-360" if inside == 1 else f"{1 - inside:.0%} of the values outside 0-360")
+            g[2].append(("values within 0-360" if (x >= 0).all() else "values within -360..360") if inside == 1
+                        else f"{1 - inside:.0%} of the values outside -360..360")
         elif r == "dip":
             inside = x.between(-90, 90).mean()
             g[1] += 0.05 if inside == 1 else -0.4

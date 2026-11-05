@@ -8,7 +8,7 @@ holes with no collar, intervals beyond the hole's length) on every table of the 
 * ``overlapping_intervals`` (warning): an interval starting before the previous one of its hole ends.
 * ``gap`` (info): an interval starting after the previous one ends.
 * ``point_without_collar`` (warning), ``point_beyond_depth`` (warning): depth points of a hole with no collar, or deeper than it.
-* ``value_out_of_range`` (warning): an azimuth outside 0-360 or a dip outside -90..90.
+* ``value_out_of_range`` (warning): an azimuth outside -360..360 or a dip outside -90..90.
 * ``unparsed_values`` (warning): values of a number or date column that could not be read as one (``<0.01``, ``ND``) and became empty.
 * ``hole_id_mismatch`` (warning): a hole id that matches a collar only once spaces, case and dashes are ignored (``DDH-01`` / ``ddh01 ``).
 
@@ -71,7 +71,7 @@ def _intervals(name: str, t: pd.DataFrame) -> list:
 
 def _ranges(name: str, t: pd.DataFrame) -> list:
     out = []
-    for col, lo, hi in (("AZIMUTH", 0, 360), ("DIP", -90, 90)):
+    for col, lo, hi in (("AZIMUTH", -360, 360), ("DIP", -90, 90)):
         if col not in t:
             continue
         v = t[col]

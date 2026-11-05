@@ -23,7 +23,7 @@ _LAZY = {
     "build_report": "report", "write_html": "report",
     "plot_soft_boundary_boxplots": "soft_boundary", "soft_boundary_pairs": "soft_boundary", "soft_boundary_values": "soft_boundary",
     "Desurveyed": "desurvey", "desurvey_intervals": "desurvey",
-    "interval_table": "drillholes", "point_table": "drillholes", "traces": "drillholes", "Polyline": "shapes",
+    "interval_table": "drillholes", "point_table": "drillholes", "traces": "drillholes", "desurvey_traces": "drillholes", "Polyline": "shapes",
     "DrillholeSet": "drillholesets", "group_tables": "drillholesets", "drillhole_role": "drillholesets", "hole_ids": "drillholesets",
     "best_set": "drillholesets", "NeedsReview": "drillholesets", "SpecMismatch": "drillholesets",
     "read_table": "tables", "ParseOptions": "tables", "TableReadError": "tables",

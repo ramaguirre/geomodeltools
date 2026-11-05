@@ -32,7 +32,6 @@ from .schema import DRILLHOLE_KINDS, REQUIRED, ROLE_LABELS, ColumnSpec, SetSpec,
 ROLES = DRILLHOLE_KINDS   # "collars", "surveys", "intervals", "points"
 MIN_SHARE = 0.5   # a table joins a set when at least this share of its holes are in the set's collars...
 MARGIN = 0.2      # ...and that share beats the next set's by at least this much
-_AUTO_KEEP = 0.6  # a spec guessed with nobody to review it keeps only the roles found by name (not "contains HOLE")
 
 
 class SpecMismatch(ValueError):
@@ -68,10 +67,11 @@ def hole_ids(df: pd.DataFrame, column: str | None = None) -> set[str]:
 
 
 def _auto_spec(name: str, df: pd.DataFrame, role: str, known: set | None = None) -> TableSpec:
-    """A table's spec guessed with nobody to review it: only the roles found by their names are kept."""
+    """A table's spec guessed with nobody to review it: only the roles found by their usual names are kept (as before specs), not the
+    weaker guesses from part of a name ("HOLE_LENGTH_M" contains LENGTH)."""
     g = guess_table(df, name, kind=role, known_holes=known)
     for c in g.columns:
-        if c.role and c.confidence < _AUTO_KEEP and c.role not in REQUIRED[role]:
+        if c.role and c.role not in REQUIRED[role] and not any(r.startswith("name matches") for r in c.reasons):
             c.role, c.dtype = None, "number"
     cols = [ColumnSpec(c.name, c.dtype, role=c.role, unit=c.unit) for c in g.columns]
     return TableSpec(name, role, cols)
@@ -218,21 +218,22 @@ class DrillholeSet:
 
     # ---- desurveyed ---------------------------------------------------------------------------------------------------------------
 
-    def _collars_surveys(self):
+    def collars_and_surveys(self) -> tuple:
+        """The collar and survey tables as `desurvey` takes them (`canonical`; surveys None when the set has none)."""
         return self.canonical(self.collars_name), (self.canonical(self.surveys_name) if self.surveys is not None else None)
 
     def interval_table(self, name: str, **kw) -> pd.DataFrame:
         """An interval table of the set in real coordinates (`geomodeltools.drillholes.interval_table`: TOP/MID/BOTTOM X/Y/Z)."""
         from .drillholes import interval_table
 
-        c, s = self._collars_surveys()
+        c, s = self.collars_and_surveys()
         return interval_table(c, s, self.canonical(name), dip_positive_down=self.dip_positive_down, **kw)
 
     def point_table(self, name: str, **kw) -> pd.DataFrame:
         """A point table of the set in real coordinates (`geomodeltools.drillholes.point_table`: X/Y/Z at each depth)."""
         from .drillholes import point_table
 
-        c, s = self._collars_surveys()
+        c, s = self.collars_and_surveys()
         p = self.canonical(name)
         return point_table(c, s, p, depth="DEPTH", attributes=[x for x in p.columns if x not in ("HOLEID", "DEPTH")],
                            dip_positive_down=self.dip_positive_down, **kw)
@@ -241,7 +242,7 @@ class DrillholeSet:
         """One `Polyline` per hole of the set (`geomodeltools.drillholes.traces`)."""
         from .drillholes import traces
 
-        c, s = self._collars_surveys()
+        c, s = self.collars_and_surveys()
         return traces(c, s, dip_positive_down=self.dip_positive_down, **kw)
 
     def desurvey(self) -> dict[str, pd.DataFrame]:
@@ -327,15 +328,18 @@ class DrillholeSet:
         return out
 
     @classmethod
-    def open(cls, path, *, accept_new: bool = True) -> DrillholeSet:
+    def open(cls, path, *, accept_new: bool = True, table_names: str = "spec") -> DrillholeSet:
         """A set from a set file: its tables read as their specs say, from beside the file. A table with columns its spec does not know
         has them guessed (``accept_new``; they are listed in ``review``); a table that lost columns its spec names raises
-        `SpecMismatch`, saying which."""
+        `SpecMismatch`, saying which. ``table_names="file"`` names the tables by their file names (collar.csv) instead of their specs'."""
         from .setfile import read_setfile
         from .tables import read_table
 
         path = pathlib.Path(path)
         spec = read_setfile(path)
+        if table_names == "file":
+            for t in spec.tables():
+                t.name = pathlib.PurePath(t.path).name
         frames, changes = {}, {}
         for t in spec.tables():
             df, _ = read_table(path.parent / t.path, t.parse)

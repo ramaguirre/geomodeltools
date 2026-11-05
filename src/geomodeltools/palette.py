@@ -7,7 +7,6 @@ up too similar (CIEDE2000 below a threshold) are pushed apart in lightness, neve
 """
 from __future__ import annotations
 
-import colorsys
 import math
 
 # ICS colour code (CGMW), hex. Source: ICS chart colours as published in the Macrostrat interval table (2025 chart values).
@@ -131,7 +130,6 @@ def spread_lightness(colours: dict, group: list[str], min_de: float = 10.0, step
         worst, who = min_pairwise_de({k: out[k] for k in group})
         if worst >= min_de:
             break
-        order = sorted(group, key=lambda k: rgb_to_lab(out[k])[0])
         a, b = who
         lo, hi = (a, b) if rgb_to_lab(out[a])[0] <= rgb_to_lab(out[b])[0] else (b, a)
         L, A, B = rgb_to_lab(out[lo]); out[lo] = lab_to_rgb((max(L - step, 5), A, B))

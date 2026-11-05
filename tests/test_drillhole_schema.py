@@ -67,8 +67,9 @@ def test_the_kind_rules_are_those_drillhole_sets_always_used():
 
 def test_values_lower_a_guess_made_from_names():
     bad = pd.DataFrame({"HOLEID": ["A", "B"], "DEPTH": [0.0, 10], "AZIMUTH": [400.0, 90], "DIP": [-60.0, -50]})
+    assert next(c for c in guess_table(bad.assign(AZIMUTH=[-27.0, 90])).columns if c.name == "AZIMUTH").confidence >= 0.8   # -27 is 333
     az = next(c for c in guess_table(bad).columns if c.name == "AZIMUTH")
-    assert az.confidence < 0.8 and "outside 0-360" in "; ".join(az.reasons)
+    assert az.confidence < 0.8 and "outside -360..360" in "; ".join(az.reasons)
     generic = guess_table(pd.DataFrame({"ID": ["A", "B"], "X": [1.0, 2], "Y": [1.0, 2], "Z": [1.0, 2]}))
     assert generic.kind == "collars" and generic.needs_review() == ["ID"]           # "ID" matches too much to be trusted alone
 

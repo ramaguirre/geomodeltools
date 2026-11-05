@@ -73,7 +73,6 @@ def prepare(polygons, crs, bbox, spacing, z0: float = 0.0):
     if src.is_geographic:
         raise ValueError("Give the polygons and the box in a metric CRS (UTM); geographic input is not reprojected here.")
     xmin, xmax, ymin, ymax = bbox
-    box = shapely.box(xmin, ymin, xmax, ymax)
     union = shapely.buffer(unary_union([g if g.is_valid else shapely.make_valid(g) for g in geoms]), 0)
     inner = shapely.box(xmin + 2 * spacing, ymin + 2 * spacing, xmax - 2 * spacing, ymax - 2 * spacing)
     kept = union.intersection(inner)
@@ -380,7 +379,6 @@ def transects(v, f, z_t, z_b, polygon, field, p: BasinParams, path: Path, n=3, z
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import matplotlib.tri as mtri
-    import shapely
 
     interp_t = mtri.LinearTriInterpolator(mtri.Triangulation(v[:, 0], v[:, 1], f), z_t)
     interp_b = mtri.LinearTriInterpolator(mtri.Triangulation(v[:, 0], v[:, 1], f), z_b)
