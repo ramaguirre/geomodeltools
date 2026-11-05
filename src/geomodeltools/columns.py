@@ -1,4 +1,5 @@
-"""Finding a table's columns by their usual names (case-insensitive). Shared by `desurvey` and geoview."""
+"""The usual names of a table's columns, and finding them (case-insensitive). The one home of every candidate list: `desurvey`,
+`guess`, `drillholesets` and geoview all read them from here (``geomodeltools.desurvey`` re-exports the drillhole ones)."""
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -12,6 +13,22 @@ XYZ_CANDIDATES = [
     ("ESTE", "NORTE", "COTA"), ("ESTE", "NORTE", "ELEVACION"), ("ESTE", "NORTE", "ELEVACIÓN"), ("ESTE", "NORTE", "ELEV"),
     ("ESTE", "NORTE", "Z"), ("ESTE_COLLAR", "NORTE_COLLAR", "COTA_COLLAR"),
 ]
+#: block sizes of a block model
+SIZE_CANDIDATES = [("DX", "DY", "DZ"), ("XINC", "YINC", "ZINC"), ("SIZE_X", "SIZE_Y", "SIZE_Z"), ("XSIZE", "YSIZE", "ZSIZE")]
+
+HOLE_CANDIDATES = ["HOLEID", "HOLE_ID", "BHID", "DHID", "HOLE", "SONDAJE", "ID"]
+DEPTH_CANDIDATES = ["DEPTH", "AT", "MD", "DISTANCE", "PROF", "PROFUNDIDAD"]
+LENGTH_CANDIDATES = ["MAX_DEPTH", "MAXDEPTH", "LENGTH", "DEPTH", "EOH", "TD", "LARGO", "LONGITUD", "PROFUNDIDAD_TOTAL"]
+AZIMUTH_CANDIDATES = ["AZIMUTH", "AZI", "AZ", "BRG", "BEARING", "AZIMUT", "RUMBO"]
+DIP_CANDIDATES = ["DIP", "INCLINACION", "INCLINACIÓN", "INCL", "BUZAMIENTO", "BUZ"]
+FROM_CANDIDATES = ["FROM", "MFROM", "DESDE"]
+TO_CANDIDATES = ["TO", "MTO", "HASTA"]
+
+#: the single-column roles of drillhole tables and their usual names, in the order they are tried
+ROLE_CANDIDATES = {"hole": HOLE_CANDIDATES, "depth": DEPTH_CANDIDATES, "length": LENGTH_CANDIDATES, "azimuth": AZIMUTH_CANDIDATES,
+                   "dip": DIP_CANDIDATES, "from": FROM_CANDIDATES, "to": TO_CANDIDATES}
+#: names that match too much to be trusted on their own (a guess from one of them asks to be reviewed)
+GENERIC_NAMES = {"ID", "AT", "TD", "MD", "AZ", "PROF", "DISTANCE"}
 
 
 def find_columns(df: pd.DataFrame, candidates: Sequence[tuple[str, str, str]]) -> tuple[str, str, str] | None:

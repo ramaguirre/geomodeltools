@@ -31,15 +31,9 @@ from collections.abc import Sequence
 import numpy as np
 import pandas as pd
 
-from .columns import XYZ_CANDIDATES, find_column, find_columns
-
-HOLE_CANDIDATES = ["HOLEID", "HOLE_ID", "BHID", "DHID", "HOLE", "SONDAJE", "ID"]
-DEPTH_CANDIDATES = ["DEPTH", "AT", "MD", "DISTANCE", "PROF", "PROFUNDIDAD"]
-LENGTH_CANDIDATES = ["MAX_DEPTH", "MAXDEPTH", "LENGTH", "DEPTH", "EOH", "TD", "LARGO", "LONGITUD", "PROFUNDIDAD_TOTAL"]
-AZIMUTH_CANDIDATES = ["AZIMUTH", "AZI", "AZ", "BRG", "BEARING", "AZIMUT", "RUMBO"]
-DIP_CANDIDATES = ["DIP", "INCLINACION", "INCLINACIÓN", "INCL", "BUZAMIENTO", "BUZ"]
-FROM_CANDIDATES = ["FROM", "MFROM", "DESDE"]
-TO_CANDIDATES = ["TO", "MTO", "HASTA"]
+# the usual column names live in `columns`; re-exported here, where apps have always imported them from
+from .columns import (AZIMUTH_CANDIDATES, DEPTH_CANDIDATES, DIP_CANDIDATES, FROM_CANDIDATES,  # noqa: F401
+                      HOLE_CANDIDATES, LENGTH_CANDIDATES, TO_CANDIDATES, XYZ_CANDIDATES, find_column, find_columns)
 
 
 def _collar_column(collars, given, candidates, what):

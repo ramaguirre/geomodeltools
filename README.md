@@ -171,8 +171,37 @@ dependency only.
 ### Drillhole sets
 
 A set is one collar table, at most one survey table (without one, each hole is oriented by its collar's azimuth and dip), and
-any number of interval tables and depth-point tables, as Leapfrog Geo groups them. `group_tables` sorts loaded tables into sets
-by the holes they share, so two campaigns loaded together stay apart:
+any number of interval tables and depth-point tables, as Leapfrog Geo groups them. Every table has a **spec** (`TableSpec`): what
+the table is, and for each column its role (hole id, X, from...), type (number, category, text, date, colour), unit and whether it
+is kept. A spec is guessed, reviewed, confirmed, and saved beside the data, so the same files open again without questions and
+nothing downstream guesses column names:
+
+```python
+from geomodeltools import DrillholeSet, NeedsReview, read_table, guess_table
+
+# one call: read (delimiter, decimal comma, encoding found), guess, and stop if anything is unsure
+try:
+    s = DrillholeSet.onboard(folder, ["collar.csv", "survey.csv", "intervals.csv"], "Centinela 2025")
+except NeedsReview as e:
+    print(e)               # e.g.  intervals.csv: CU (89% numbers; 1 values are detection-limit codes (e.g. '<0.01'))
+s = DrillholeSet.onboard(folder, files, "Centinela 2025",
+                         edits={"intervals.csv": {"CU": {"unit": "%"}, "OBS": {"selected": False}}})   # {} accepts a guess
+
+for issue in s.validate():  # duplicate collars, FROM >= TO, overlaps, holes with no survey, unread values, DDH-01 vs DDH01...
+    print(issue)
+s.save(folder / "centinela_2025.dhset.yaml")        # the specs only (YAML; paths relative to it), never the data
+s = DrillholeSet.open(folder / "centinela_2025.dhset.yaml")   # next time; new columns are guessed and listed in s.review
+s.interval_table("intervals")                         # TOP/MID/BOTTOM X/Y/Z, columns taken from the specs
+
+# step by step: the guess says how sure it is and why
+df, parse = read_table(folder / "intervals.csv")
+g = guess_table(df, "intervals.csv", known_holes=s.holes())
+print(g)                   # kind, then per column: role, dtype, unit, confidence and reasons ("<- review" under 0.8)
+spec = g.to_spec("assays", path="intervals.csv", parse=parse, edits={"CU": {"unit": "%"}})
+```
+
+A set built from tables alone (`DrillholeSet("campaign", collars, surveys)`) guesses its specs from the column names, as before.
+`group_tables` sorts loaded tables into sets by the holes they share, so two campaigns loaded together stay apart:
 
 ```python
 from geomodeltools import DrillholeSet, group_tables, drillhole_role
