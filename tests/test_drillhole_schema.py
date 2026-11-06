@@ -180,3 +180,42 @@ def test_dates_mixing_text_and_excel_day_numbers_and_empty_columns_need_no_revie
     typed = g.to_spec().apply(df)
     assert typed["STARTDATE"].dt.strftime("%Y-%m-%d").tolist() == ["2009-10-03", "2016-12-05", "2014-03-29", "2011-04-10"]
     assert "TENEMENTID" not in typed
+
+
+# ---- by column names -----------------------------------------------------------------------------------------------------------
+
+
+def test_a_set_from_named_columns_desurveys_any_table_keeping_its_names(tmp_path):
+    collars, surveys, assays = _write_campaign(tmp_path)
+    surveys = surveys.rename(columns={"SONDAJE": "DDH"})
+    s = DrillholeSet.from_columns(tmp_path / "collar.csv", surveys, hole="SONDAJE", x="ESTE", y="NORTE", z="COTA",
+                                  at="PROFUNDIDAD", azimuth="AZIMUT", dip="INCLINACION", survey_hole="DDH", name="campaña")
+    assert s.spec_of(s.collars_name).column("length") == "LARGO"           # the one column guessed when not named
+    assert s.dip_positive_down is False                                     # read from the signs
+    with pytest.warns(UserWarning, match="no collar"):
+        t = s.desurvey_table(assays, hole="SONDAJE", from_="DESDE", to="HASTA")
+    assert list(t.columns[:6]) == list(assays.columns) and len(t) == len(assays)
+    assert t["TOP_X"].notna().tolist() == [True] * 6 + [False] * 3          # "ddh03" has no collar: its rows stay, without coordinates
+    assert t.attrs["skipped"].to_dict() == {"ddh03": "no collar"}
+    ref = interval_table(collars, surveys.rename(columns={"DDH": "SONDAJE"}), assays.head(6), hole="SONDAJE", from_="DESDE",
+                         to="HASTA", at="PROFUNDIDAD", azimuth="AZIMUT", dip="INCLINACION", length="LARGO", xyz=("ESTE", "NORTE", "COTA"),
+                         dip_positive_down=False)
+    np.testing.assert_allclose(t.loc[:5, ["TOP_X", "MID_Y", "BOTTOM_Z"]].to_numpy(), ref[["TOP_X", "MID_Y", "BOTTOM_Z"]].to_numpy())
+
+    pts = s.desurvey_table(assays.head(6)[["SONDAJE", "DESDE", "LITO"]], hole="SONDAJE", from_="DESDE", name="muestras")
+    assert list(pts.columns) == ["SONDAJE", "DESDE", "LITO", "X", "Y", "Z"]
+    np.testing.assert_allclose(pts[["X", "Y", "Z"]].to_numpy(), t.loc[:5, ["TOP_X", "TOP_Y", "TOP_Z"]].to_numpy())
+    assert ("muestras", "points") in s.tables()
+
+
+def test_named_columns_that_are_not_there_say_what_is():
+    collars = pd.DataFrame({"BHID": ["A"], "E": [0.0], "N": [0.0], "RL": [0.0], "AZ": [0.0], "DIP": [-90.0]})
+    with pytest.raises(KeyError, match="no column 'EAST'.*BHID, E, N"):
+        DrillholeSet.from_columns(collars, hole="BHID", x="EAST", y="N", z="RL", collar_azimuth="AZ", collar_dip="DIP")
+    with pytest.raises(TypeError, match="collar_azimuth"):
+        DrillholeSet.from_columns(collars, hole="BHID", x="E", y="N", z="RL")
+    s = DrillholeSet.from_columns(collars, hole="BHID", x="E", y="N", z="RL", collar_azimuth="AZ", collar_dip="DIP")
+    p = s.desurvey_table(pd.DataFrame({"BHID": ["A"], "AT": [10.0]}), hole="BHID", from_="AT")
+    np.testing.assert_allclose(p[["X", "Y", "Z"]].to_numpy(), [[0.0, 0.0, -10.0]], atol=1e-9)
+    with pytest.raises(ValueError, match="already has column"):
+        s.desurvey_table(pd.DataFrame({"BHID": ["A"], "AT": [10.0], "X": [1]}), hole="BHID", from_="AT")

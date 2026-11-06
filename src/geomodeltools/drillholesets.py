@@ -10,6 +10,13 @@ has a `TableSpec` (what its columns are: `schema`), so nothing downstream guesse
     s.interval_table("intervals")                 # TOP/MID/BOTTOM X/Y/Z, by minimum curvature
     s.traces()                                    # one Polyline per hole
 
+With the column names known, nothing is guessed:
+
+    s = DrillholeSet.from_columns("collar.csv", "survey.csv", hole="HOLEID", x="EAST", y="NORTH", z="RL", at="DEPTH",
+                                  azimuth="AZIMUTH", dip="DIP")
+    s.desurvey_table("assays.csv", hole="HOLEID", from_="FROM", to="TO")    # the table as given, + TOP/MID/BOTTOM X/Y/Z
+    s.desurvey_table(samples, hole="HOLEID", from_="DEPTH")                 # to=None: points, + X/Y/Z
+
 Built from tables only, a set guesses each table's spec from its names (``DrillholeSet("campaign", collars, surveys)``), as before.
 
 Tables are told apart by their columns (`drillhole_role`, the rules of `guess.table_kind`). `group_tables` sorts loaded tables into
@@ -419,6 +426,142 @@ class DrillholeSet:
                               surveys=pair(by("surveys")[0]) if by("surveys") else None,
                               intervals={specs[f].name: pair(f) for f in by("intervals")},
                               points={specs[f].name: pair(f) for f in by("points")}, dip_positive_down=dip_positive_down)
+
+    # ---- by column names: no guessing -----------------------------------------------------------------------------------------------
+
+    @classmethod
+    def from_columns(cls, collars, surveys=None, *, hole: str, x: str, y: str, z: str, length: str | None = None,
+                     collar_azimuth: str | None = None, collar_dip: str | None = None, at: str | None = None,
+                     azimuth: str | None = None, dip: str | None = None, survey_hole: str | None = None,
+                     dip_positive_down: bool | None = None, name: str = "drillholes", crs: str | None = None) -> DrillholeSet:
+        """A set from a collar and a survey table (each a file or a DataFrame) whose columns are named, not guessed.
+
+        Collars: ``hole``, ``x``, ``y``, ``z``; ``length`` (hole length) is optional: when not given, a column with a usual name for it
+        (MAX_DEPTH, LENGTH, EOH...) is used if there is one, and otherwise each hole ends at its deepest survey station.
+        ``collar_azimuth`` / ``collar_dip`` orient the holes that have no survey rows. Surveys: ``at`` (the depth of each station),
+        ``azimuth``, ``dip``, and ``survey_hole`` when the survey names the hole id column differently (else ``hole``). Without
+        ``surveys``, every hole is oriented by its collar's azimuth and dip. ``dip_positive_down`` None reads the convention from the
+        dips' signs (said in ``dip_note``).
+
+        A name that is not a column raises a `KeyError` listing the table's columns. The other columns are kept, their types guessed
+        (number, category, text, date). Tables given as files keep their paths, so the set can be `save`d and opened again.
+        """
+        ctable, cparse, cpath = _table_of(collars)
+        if length is None:
+            from .columns import LENGTH_CANDIDATES
+
+            length = find_column(ctable, None, LENGTH_CANDIDATES, "", required=False)
+            if length in (hole, x, y, z, collar_azimuth, collar_dip):
+                length = None
+        croles = {"hole": hole, "x": x, "y": y, "z": z, "length": length, "azimuth": collar_azimuth, "dip": collar_dip}
+        pair_c = (_named_spec(_stem(collars, f"{name} collars"), "collars", ctable, croles, cpath, cparse), ctable)
+        pair_s = None
+        if surveys is not None:
+            missing = [k for k, v in (("at", at), ("azimuth", azimuth), ("dip", dip)) if v is None]
+            if missing:
+                raise TypeError(f"from_columns: with a survey table, name its {', '.join(missing)} column(s)")
+            stable, sparse, spath = _table_of(surveys)
+            sroles = {"hole": survey_hole or hole, "depth": at, "azimuth": azimuth, "dip": dip}
+            pair_s = (_named_spec(_stem(surveys, f"{name} surveys"), "surveys", stable, sroles, spath, sparse), stable)
+        elif collar_azimuth is None or collar_dip is None:
+            raise TypeError("from_columns: without a survey table, name the collar_azimuth and collar_dip columns")
+        return cls.from_specs(name, collars=pair_c, surveys=pair_s, dip_positive_down=dip_positive_down, crs=crs)
+
+    def desurvey_table(self, table, *, hole: str, from_: str, to: str | None = None, name: str | None = None,
+                       warn: bool = True) -> pd.DataFrame:
+        """A table (a file or a DataFrame) of the set's holes in real coordinates, by minimum curvature: every row and column as given,
+        names and order kept, plus TOP_X/Y/Z (at ``from_``), MID_X/Y/Z (half way along the hole) and BOTTOM_X/Y/Z (at ``to``); with
+        ``to`` None, the table holds points at depth ``from_`` along the hole and gets X, Y, Z.
+
+        Rows of holes that cannot be placed (not in the collars, a repeated survey depth, no survey) keep empty coordinates; the holes
+        and why are in ``result.attrs["skipped"]`` (and a warning, unless ``warn`` is False). ``name`` also adds the table to the set
+        under that name (`add`), so `save` keeps it.
+        """
+        from .desurvey import desurvey_intervals
+        from .drillholes import INTERVAL_POSITIONS, _positions
+
+        df, parse, path = _table_of(table)
+        _need(df, [hole, from_] + ([to] if to else []), "the table")
+        out_cols = ["X", "Y", "Z"] if to is None else [f"{label}_{a}" for label in INTERVAL_POSITIONS.values() for a in "XYZ"]
+        clash = [c for c in out_cols if c in df.columns]
+        if clash:
+            raise ValueError(f"the table already has column(s) {', '.join(clash)}; rename them first")
+        start = pd.to_numeric(df[from_], errors="coerce").to_numpy(float)
+        tmp = pd.DataFrame({"HOLEID": df[hole].astype(str).str.strip().to_numpy(), "FROM": start,
+                            "TO": start if to is None else pd.to_numeric(df[to], errors="coerce").to_numpy(float)})
+        c, s = self.collars_and_surveys()
+        known = set(c["HOLEID"])
+        no_collar = sorted(set(tmp.loc[~tmp.HOLEID.isin(known), "HOLEID"]))
+        ok = (tmp.HOLEID.isin(known) & tmp.FROM.notna() & tmp.TO.notna()).to_numpy()
+        coords = pd.DataFrame(float("nan"), index=range(len(df)), columns=out_cols)
+        skipped = pd.Series(dict.fromkeys(no_collar, "no collar"), dtype=object)
+        if ok.any():
+            d = desurvey_intervals(c, s, tmp[ok].reset_index(drop=True), hole="HOLEID", from_="FROM", to="TO", attributes=[],
+                                   dip_positive_down=self.dip_positive_down, warn=warn, stacklevel=3)
+            got = d.intervals
+            rows = ok.nonzero()[0][got["_row"].to_numpy()]
+            if to is None:
+                values = got[["start_x", "start_y", "start_z"]].to_numpy()
+            else:
+                values = pd.DataFrame(_positions(got))[out_cols].to_numpy()
+            coords.iloc[rows] = values
+            skipped = pd.concat([skipped, d.skipped[d.skipped.index.isin(set(tmp.HOLEID))]])
+        if no_collar and warn:
+            import warnings
+
+            warnings.warn(f"{len(no_collar)} holes of the table have no collar; their rows have no coordinates "
+                          f"(e.g. {no_collar[0]!r})", stacklevel=2)
+        result = pd.concat([df.reset_index(drop=True), coords], axis=1)
+        result.attrs["skipped"] = skipped.rename("reason")
+        if name is not None:
+            kind = "points" if to is None else "intervals"
+            roles = {"hole": hole, "depth": from_} if to is None else {"hole": hole, "from": from_, "to": to}
+            self.add(name, df, kind, _named_spec(name, kind, df, roles, path, parse))
+        return result
+
+
+def _table_of(source):
+    """``(DataFrame, ParseOptions or None, resolved path or None)`` of a file or a DataFrame."""
+    if isinstance(source, pd.DataFrame):
+        return source, None, None
+    from .tables import read_table
+
+    path = pathlib.Path(source)
+    df, parse = read_table(path)
+    return df, parse, str(path.resolve())
+
+
+def _stem(source, default: str) -> str:
+    return default if isinstance(source, pd.DataFrame) else pathlib.Path(source).stem
+
+
+def _need(df: pd.DataFrame, names, what: str) -> None:
+    missing = [n for n in names if n not in df.columns]
+    if missing:
+        raise KeyError(f"{what} has no column {', '.join(map(repr, missing))}; its columns are {', '.join(map(str, df.columns))}")
+
+
+def _named_spec(name: str, kind: str, df: pd.DataFrame, roles: Mapping[str, str | None], path, parse) -> TableSpec:
+    """A spec whose role columns are the ones named (by the user); the other columns keep their names, their types guessed."""
+    from .schema import role_dtype
+
+    roles = {r: c for r, c in roles.items() if c is not None}
+    _need(df, list(roles.values()), f"table {name!r}")
+    by_col = {c: r for r, c in roles.items()}
+    if len(by_col) < len(roles):
+        raise ValueError(f"table {name!r}: one column is named for two roles ({roles})")
+    cols = []
+    for c in df.columns:
+        r = by_col.get(c)
+        if r is not None:
+            cols.append(ColumnSpec(str(c), role_dtype(r), role=r, source="user"))
+        else:
+            dtype = value_dtype(c, df[c])
+            cols.append(ColumnSpec(str(c), dtype, unit=unit_of(str(c)) if dtype == "number" else None))
+    spec = TableSpec(name, kind, cols, path=path)
+    if parse is not None:
+        spec.parse = parse
+    return spec
 
 
 # ---- sorting tables into sets ---------------------------------------------------------------------------------------------------

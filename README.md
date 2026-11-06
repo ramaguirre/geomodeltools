@@ -174,7 +174,25 @@ A set is one collar table, at most one survey table (without one, each hole is o
 any number of interval tables and depth-point tables, as Leapfrog Geo groups them. Every table has a **spec** (`TableSpec`): what
 the table is, and for each column its role (hole id, X, from...), type (number, category, text, date, colour), unit and whether it
 is kept. A spec is guessed, reviewed, confirmed, and saved beside the data, so the same files open again without questions and
-nothing downstream guesses column names:
+nothing downstream guesses column names.
+
+The short way: name the columns yourself (files or DataFrames), then desurvey any table of those holes in one call:
+
+```python
+from geomodeltools import DrillholeSet
+
+s = DrillholeSet.from_columns("Collar.csv", "Survey.csv", hole="HOLEID", x="EAST", y="NORTH", z="RL", length="DEPTH",
+                              at="DEPTH", azimuth="AZIMUTH", dip="DIP", name="Centinela")   # survey_hole= if it names the id differently
+assays = s.desurvey_table("assays.csv", hole="BHID", from_="FROM", to="TO")   # + TOP/MID/BOTTOM_X/Y/Z
+samples = s.desurvey_table(samples_df, hole="BHID", from_="DEPTH")            # to=None: points, + X/Y/Z
+```
+
+Nothing is guessed but the collar's hole length when it is not named (a column with a usual name, else the deepest survey
+station) and the dip convention when `dip_positive_down` is not given (from the dips' signs, said in `s.dip_note`). The table
+comes back with every row and column as given, names and order kept; rows of holes that could not be placed have empty
+coordinates and the holes are in `result.attrs["skipped"]`. `name=` also keeps the table in the set, so `s.save(...)` writes it.
+
+The guessing way, for files you have not seen:
 
 ```python
 from geomodeltools import DrillholeSet, NeedsReview, read_table, guess_table
