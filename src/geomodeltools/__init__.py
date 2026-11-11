@@ -27,7 +27,7 @@ _LAZY = {
     "PointSet": "shapes", "LineSet": "shapes", "Surface": "shapes", "write_omf": "omf_io", "read_omf": "omf_io",
     "write_dxf": "export", "write_obj": "export", "write_csv": "export", "dxf_layer_name": "export",
     "latlon_to_xy": "collars", "block_model_bounds": "collars", "dem_for_block_model": "collars", "sample_dem_z": "collars",
-    "collars_from_latlon": "collars",
+    "collars_from_latlon": "collars", "z_on_surface": "collars", "points_in_polygons": "sampling",
 }
 _EXTRA = {"geopandas": "geo", "shapely": "geo", "rasterio": "geo", "requests": "geo", "scipy": "plots", "matplotlib": "plots",
           "ezdxf": "dxf"}
