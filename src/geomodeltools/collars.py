@@ -164,6 +164,43 @@ def z_on_surface(x, y, vertices, triangles, chunk_pairs=4_000_000):
     return z
 
 
+def surface_to_grid(vertices, triangles, cell, bounds=None, out_tiff=None, crs=_cfg.DEFAULT_CRS, nodata=-9999.0):
+    """Regular elevation grid (a raster DEM) from a triangulated surface, optionally written as a GeoTIFF.
+
+    ``cell``: grid spacing. ``bounds``: [minx, miny, maxx, maxy] to cover (default: the surface's extent);
+    the grid starts at minx / maxy and has whole cells, so it may reach up to one cell past maxx / below miny.
+    Each cell's z is ``z_on_surface`` at its centre: linear in the mesh's own triangles, the highest sheet
+    where the surface folds, NaN off the surface.
+
+    Returns ``(xs, ys, z)``: cell-centre x (west to east), y (north to south) and z with shape (len(ys), len(xs)),
+    row 0 the northern row, as in a GeoTIFF. With ``out_tiff`` it also writes a float32 GeoTIFF in ``crs`` with
+    NaN stored as ``nodata`` (needs rasterio); ``sample_dem_z`` reads it back.
+    """
+    v = np.asarray(vertices, dtype=float)
+    if cell <= 0:
+        raise ValueError("cell must be positive")
+    if bounds is None:
+        bounds = (v[:, 0].min(), v[:, 1].min(), v[:, 0].max(), v[:, 1].max())
+    x0, y0, x1, y1 = map(float, bounds)
+    nx = max(int(np.ceil((x1 - x0) / cell - 1e-9)), 1)
+    ny = max(int(np.ceil((y1 - y0) / cell - 1e-9)), 1)
+    xs = x0 + cell * (np.arange(nx) + 0.5)
+    ys = y1 - cell * (np.arange(ny) + 0.5)
+    gx, gy = np.meshgrid(xs, ys)
+    z = z_on_surface(gx.ravel(), gy.ravel(), v, triangles).reshape(ny, nx)
+
+    if out_tiff is not None:
+        import rasterio
+        from rasterio.transform import from_origin
+
+        out_tiff = Path(out_tiff)
+        out_tiff.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(out_tiff, "w", driver="GTiff", height=ny, width=nx, count=1, dtype="float32", crs=crs,
+                           transform=from_origin(x0, y1, cell, cell), nodata=nodata, compress="deflate") as dst:
+            dst.write(np.where(np.isnan(z), nodata, z).astype("float32"), 1)
+    return xs, ys, z
+
+
 def collars_from_latlon(df, dem_path, lat_col="lat", lon_col="lon", crs=_cfg.DEFAULT_CRS):
     """Copy of ``df`` with ``x``, ``y`` (lat/lon -> ``crs``) and ``z`` (DEM elevation at x, y) columns.
 

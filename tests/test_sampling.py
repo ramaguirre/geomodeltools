@@ -124,3 +124,32 @@ def test_many_points_many_triangles_is_fast():
     z = z_on_surface(x, y, v, t)
     assert time.perf_counter() - t0 < 20
     np.testing.assert_allclose(z, plane(x, y), atol=1e-6)
+
+
+# --- surface_to_grid -------------------------------------------------------------------------------------------
+
+def test_surface_to_grid_matches_plane_and_layout():
+    from geomodeltools import surface_to_grid
+
+    v, t = _grid_mesh(10, zfun=plane)                                   # covers 0..100 x 0..100
+    xs, ys, z = surface_to_grid(v, t, cell=10)
+    assert z.shape == (10, 10)
+    np.testing.assert_allclose(xs, np.arange(5, 100, 10))
+    np.testing.assert_allclose(ys, np.arange(95, 0, -10))                # row 0 is the northern row
+    np.testing.assert_allclose(z, plane(xs[None, :], ys[:, None]), atol=1e-9)
+
+
+def test_surface_to_grid_nan_off_surface_and_geotiff_round_trip(tmp_path):
+    rasterio = pytest.importorskip("rasterio")
+    from geomodeltools import sample_dem_z, surface_to_grid
+
+    v, t = _grid_mesh(10, zfun=plane)
+    tif = tmp_path / "sub" / "surface.tif"
+    xs, ys, z = surface_to_grid(v, t, cell=20, bounds=(-40, 0, 100, 100), out_tiff=tif, crs="EPSG:32719")
+    assert np.isnan(z[:, xs < 0]).all() and not np.isnan(z[:, xs > 0]).any()
+    with rasterio.open(tif) as src:
+        assert (src.width, src.height) == (7, 5) and src.crs.to_epsg() == 32719
+        assert src.transform.c == -40 and src.transform.f == 100 and src.transform.a == 20
+    gx, gy = np.meshgrid(xs, ys)
+    back = sample_dem_z(gx.ravel(), gy.ravel(), tif).reshape(z.shape)
+    np.testing.assert_allclose(back, z, rtol=1e-6, equal_nan=True)     # float32 in the file, nodata -> NaN
