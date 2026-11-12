@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geomodeltools"
-version = "0.8.0"
+version = "0.9.0"
 description = "Utilities for 3D geological modeling: drillhole desurvey, depth tables and 3D export (OMF, DXF, OBJ), swath and EDA tools, colours, geometry and DEM workflows."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,7 +14,8 @@ authors = [
 license = "MIT"
 dependencies = [
   "numpy>=1.24",
-  "pandas>=2.0"
+  "pandas>=2.0",
+  "pyyaml>=6"     # drillhole set files (.dhset.yaml)
 ]
 
 [project.optional-dependencies]

@@ -7,6 +7,7 @@ holes that cannot be placed are those of `desurvey_intervals`, which both wrap.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -68,16 +69,26 @@ def point_table(collars: pd.DataFrame, surveys: pd.DataFrame | None, points: pd.
                       out[["start_x", "start_y", "start_z"]].set_axis(["X", "Y", "Z"], axis=1)], axis=1)
 
 
-def traces(collars: pd.DataFrame, surveys: pd.DataFrame | None = None, *, hole: str | None = None,
-           xyz: Sequence[str] | None = None, length: str | None = None, at: str | None = None, azimuth: str | None = None,
-           dip: str | None = None, dip_positive_down: bool = True, duplicates="skip", max_sag: float = 0.05,
-           max_turn: float = 3.0, warn: bool = True) -> list[Polyline]:
-    """One `Polyline` per hole, from the collar to the end of the hole, named by the hole id (as text), in collar order.
+@dataclass
+class Traced:
+    """Result of `desurvey_traces`: one `Polyline` per hole placed (``traces``, in collar order), the holes left out and why
+    (``skipped``), and `check_tables` of the input (``report``)."""
+    traces: list
+    skipped: pd.Series
+    report: pd.DataFrame
+
+
+def desurvey_traces(collars: pd.DataFrame, surveys: pd.DataFrame | None = None, *, hole: str | None = None,
+                    xyz: Sequence[str] | None = None, length: str | None = None, at: str | None = None, azimuth: str | None = None,
+                    dip: str | None = None, dip_positive_down: bool = True, duplicates="skip", max_sag: float = 0.05,
+                    max_turn: float = 3.0, warn: bool = True, stacklevel: int = 2) -> Traced:
+    """Each hole's trace as a `Polyline`, from the collar to the end of the hole, named by the hole id (as text), in collar order;
+    with the holes left out (`Traced.skipped`) and the problems found (`Traced.report`).
 
     The vertices are `trace_depths` (the collar, every survey station, the end, and extra vertices wherever the hole curves, so
     the polyline is within ``max_sag`` metres of the desurveyed arc), placed by `desurvey`. A hole's end is its collar length,
     else its deepest survey station. Column detection and ``dip_positive_down`` (True by default) are those of
-    `desurvey_intervals`; holes that cannot be placed, or have no length, are left out with a warning.
+    `desurvey_intervals`; holes that cannot be placed, or have no length, are left out (with a warning unless ``warn`` is False).
     """
     prep = _prepare(collars, surveys, None, hole=hole, xyz=xyz, length=length, at=at, azimuth=azimuth, dip=dip, from_=None,
                     to=None, dip_positive_down=dip_positive_down, duplicates=duplicates)
@@ -98,5 +109,10 @@ def traces(collars: pd.DataFrame, surveys: pd.DataFrame | None = None, *, hole: 
         depths = trace_depths(sd, az, dp, total, max_sag=max_sag, max_turn=max_turn)
         out.append(Polyline(str(hid), desurvey(c[list(prep.xyz_c)].to_numpy(float), sd, az, dp, depths)))
     if warn:
-        _warn_left_out(_Prepared(**{**prep.__dict__, "skipped": skipped}))
-    return out
+        _warn_left_out(_Prepared(**{**prep.__dict__, "skipped": skipped}), stacklevel=stacklevel + 1)
+    return Traced(out, pd.Series(skipped, dtype=object, name="reason"), prep.report)
+
+
+def traces(collars: pd.DataFrame, surveys: pd.DataFrame | None = None, **kw) -> list[Polyline]:
+    """One `Polyline` per hole (`desurvey_traces`, whose arguments these are), from the collar to the end of the hole."""
+    return desurvey_traces(collars, surveys, stacklevel=3, **kw).traces

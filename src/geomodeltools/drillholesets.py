@@ -1,95 +1,172 @@
 """Drillhole sets: one collar table, at most one survey table, and any number of interval and point tables that belong together.
 
-A set is how Leapfrog Geo groups drillhole data, and how a project with two campaigns (or two deposits) keeps them apart:
+A set is how Leapfrog Geo groups drillhole data, and how a project with two campaigns (or two deposits) keeps them apart. Each table
+has a `TableSpec` (what its columns are: `schema`), so nothing downstream guesses column names again:
 
-    s = DrillholeSet("campaign 2025", collars, surveys)
-    s.add("assays", assays)                      # an interval table (hole id, from, to, values)
-    s.add("structures", structures)              # a point table (hole id, depth along the hole, values)
-    s.interval_table("assays")                   # TOP/MID/BOTTOM X/Y/Z, by minimum curvature
-    s.traces()                                   # one Polyline per hole
+    s = DrillholeSet.onboard(folder, ["collar.csv", "survey.csv", "intervals.csv"])   # read, guess, confirm (stops if unsure)
+    s.validate()                                  # every problem, errors first (`validate`)
+    s.save(folder / "campaign.dhset.yaml")        # the specs, beside the data
+    s = DrillholeSet.open(folder / "campaign.dhset.yaml")     # next time: no questions
+    s.interval_table("intervals")                 # TOP/MID/BOTTOM X/Y/Z, by minimum curvature
+    s.traces()                                    # one Polyline per hole
 
-Tables are told apart by their columns (`drillhole_role`): hole id + from + to are **intervals**; hole id + depth + azimuth +
-dip (no X/Y/Z) a **survey**; hole id + X/Y/Z with one row per hole a **collar** table; hole id + depth (no from/to, no X/Y/Z) a
-**point** table, i.e. depth points along the holes. A table with a hole id and X/Y/Z on many rows per hole is free points that
-happen to carry a hole id (one per photo, say): not part of a set (`drillhole_role` returns None).
+With the column names known, nothing is guessed:
 
-`group_tables` sorts loaded tables into sets by the holes they share: each collar table starts a set; a survey, interval or
-point table joins the set whose collars hold most of its holes. It never guesses where the answer is unclear: a table whose
-holes match no set well enough, or two sets about equally, or a second survey table for a set, comes back in ``unsure`` with
-the scores, for the user to place (`DrillholeSet.add` / `remove`).
+    s = DrillholeSet.from_columns("collar.csv", "survey.csv", hole="HOLEID", x="EAST", y="NORTH", z="RL", at="DEPTH",
+                                  azimuth="AZIMUTH", dip="DIP")
+    s.desurvey_table("assays.csv", hole="HOLEID", from_="FROM", to="TO")    # the table as given, + TOP/MID/BOTTOM X/Y/Z
+    s.desurvey_table(samples, hole="HOLEID", from_="DEPTH")                 # to=None: points, + X/Y/Z
+
+Built from tables only, a set guesses each table's spec from its names (``DrillholeSet("campaign", collars, surveys)``), as before.
+
+Tables are told apart by their columns (`drillhole_role`, the rules of `guess.table_kind`). `group_tables` sorts loaded tables into
+sets by the holes they share (`best_set`): each collar table starts a set; a survey, interval or point table joins the set whose
+collars hold most of its holes. It never guesses where the answer is unclear: a table whose holes match no set well enough, or two
+sets about equally, or a second survey table for a set, comes back in ``unsure`` with the scores, for the user to place.
 """
 from __future__ import annotations
 
+import pathlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 import pandas as pd
 
-from .columns import XYZ_CANDIDATES, find_column, find_columns
-from .desurvey import AZIMUTH_CANDIDATES, DEPTH_CANDIDATES, DIP_CANDIDATES, FROM_CANDIDATES, HOLE_CANDIDATES, TO_CANDIDATES
+from .columns import HOLE_CANDIDATES, find_column
+from .guess import REVIEW_BELOW, detect_dip_convention, guess_table, table_kind, unit_of, value_dtype
+from .schema import DRILLHOLE_KINDS, REQUIRED, ROLE_LABELS, ColumnSpec, SetSpec, TableSpec
 
-ROLES = ("collars", "surveys", "intervals", "points")
+ROLES = DRILLHOLE_KINDS   # "collars", "surveys", "intervals", "points"
 MIN_SHARE = 0.5   # a table joins a set when at least this share of its holes are in the set's collars...
 MARGIN = 0.2      # ...and that share beats the next set's by at least this much
 
 
-def _has(df: pd.DataFrame, candidates) -> str | None:
-    return find_column(df, None, candidates, "", required=False)
+class SpecMismatch(ValueError):
+    """A saved set's tables no longer have the columns its specs name. ``changes``: table -> {"missing", "new"}."""
+
+    def __init__(self, message: str, changes: dict):
+        super().__init__(message)
+        self.changes = changes
+
+
+class NeedsReview(ValueError):
+    """`DrillholeSet.onboard` is not sure about some columns. ``guesses``: file -> `TableGuess`; ``unsure``: file -> the columns to look at.
+    Confirm them with ``edits={file: {column: {...}}}`` (an empty ``{}`` accepts the guess)."""
+
+    def __init__(self, message: str, guesses: dict, unsure: dict):
+        super().__init__(message)
+        self.guesses, self.unsure = guesses, unsure
 
 
 def drillhole_role(df: pd.DataFrame) -> str | None:
     """What part of a drillhole set a table is, from its columns (usual names, any case): ``"collars"``, ``"surveys"``,
     ``"intervals"``, ``"points"`` (depth points along the holes), or None (not drillhole data, or free X/Y/Z points)."""
-    hole = _has(df, HOLE_CANDIDATES)
-    if hole is None:
-        return None
-    xyz = find_columns(df, XYZ_CANDIDATES)
-    if _has(df, FROM_CANDIDATES) and _has(df, TO_CANDIDATES):
-        return "intervals"
-    if xyz is None and _has(df, DEPTH_CANDIDATES) and _has(df, AZIMUTH_CANDIDATES) and _has(df, DIP_CANDIDATES):
-        return "surveys"
-    if xyz is not None:
-        n = len(df)
-        repeats = n >= 20 and df[hole].nunique() < 0.9 * n  # several rows per hole, each with a position: free points, not collars
-        return None if repeats else "collars"
-    if _has(df, DEPTH_CANDIDATES):
-        return "points"
-    return None
+    kind = table_kind(df)
+    return kind if kind in DRILLHOLE_KINDS else None
 
 
-def hole_ids(df: pd.DataFrame) -> set[str]:
-    """The holes a table names (as text, stripped), empty if it has no hole id column."""
-    hole = _has(df, HOLE_CANDIDATES)
+def hole_ids(df: pd.DataFrame, column: str | None = None) -> set[str]:
+    """The holes a table names (as text, stripped), empty if it has no hole id column. ``column`` names it (else its usual names)."""
+    hole = column if column is not None else find_column(df, None, HOLE_CANDIDATES, "", required=False)
     if hole is None:
         return set()
     return {str(h).strip() for h in df[hole].dropna()}
 
 
+def _auto_spec(name: str, df: pd.DataFrame, role: str, known: set | None = None) -> TableSpec:
+    """A table's spec guessed with nobody to review it: only the roles found by their usual names are kept (as before specs), not the
+    weaker guesses from part of a name ("HOLE_LENGTH_M" contains LENGTH)."""
+    g = guess_table(df, name, kind=role, known_holes=known)
+    for c in g.columns:
+        if c.role and c.role not in REQUIRED[role] and not any(r.startswith("name matches") for r in c.reasons):
+            c.role, c.dtype = None, "number"
+    cols = [ColumnSpec(c.name, c.dtype, role=c.role, unit=c.unit) for c in g.columns]
+    return TableSpec(name, role, cols)
+
+
 @dataclass(eq=False)
 class DrillholeSet:
     """One collar table, at most one survey table (without one, each hole is oriented by its collar's azimuth and dip), and named
-    interval and point tables. ``dip_positive_down``: how the survey (or collar) dips are stored (geomodeltools' default, as
-    Leapfrog's survey export; pass False for -60 = 60 degrees down)."""
+    interval and point tables. ``dip_positive_down``: how the survey (or collar) dips are stored (True, geomodeltools' default, as
+    Leapfrog's survey export; False for -60 = 60 degrees down; None: read from the dips' signs). ``specs``: table name -> `TableSpec`
+    (a table without one has its spec guessed from its names when first needed)."""
     name: str
     collars: pd.DataFrame
     surveys: pd.DataFrame | None = None
     intervals: dict = field(default_factory=dict)
     points: dict = field(default_factory=dict)
-    dip_positive_down: bool = True
+    dip_positive_down: bool | None = True
     #: the names the collar and survey tables were loaded under (e.g. their files), for lists and messages
     collars_name: str = ""
     surveys_name: str = ""
+    specs: dict = field(default_factory=dict)
+    #: table -> {column: (count, examples)}: values that could not be read as their column's type (see `TableSpec.apply`)
+    unparsed: dict = field(default_factory=dict)
+    #: how the dip convention was decided, in plain words
+    dip_note: str = ""
+    crs: str | None = None
+    #: table -> columns found in its file that its saved spec did not know (guessed when the set was opened: worth a look)
+    review: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        if _has(self.collars, HOLE_CANDIDATES) is None:
-            raise ValueError(f"set {self.name!r}: the collar table has no hole id column (one of {', '.join(HOLE_CANDIDATES)})")
         self.collars_name = self.collars_name or f"{self.name} collars"
+        if self.surveys is not None and not self.surveys_name:
+            self.surveys_name = f"{self.name} surveys"
+        self._guessed: dict = {}
+        if self.spec_of(self.collars_name).column("hole") is None:
+            raise ValueError(f"set {self.name!r}: the collar table has no hole id column (one of {', '.join(HOLE_CANDIDATES)})")
+        if self.dip_positive_down is None:
+            self.dip_positive_down = self.detect_dip()
+
+    # ---- specs --------------------------------------------------------------------------------------------------------------------
+
+    def frame(self, name: str) -> pd.DataFrame:
+        """A table of the set by its name."""
+        if name == self.collars_name:
+            return self.collars
+        if self.surveys is not None and name == self.surveys_name:
+            return self.surveys
+        for group in (self.intervals, self.points):
+            if name in group:
+                return group[name]
+        raise KeyError(f"set {self.name!r} has no table {name!r} (it has {', '.join(n for n, _ in self.tables())})")
+
+    def role_of(self, name: str) -> str:
+        return next(r for n, r in self.tables() if n == name)
+
+    def spec_of(self, name: str) -> TableSpec:
+        """The spec of a table: the one given, else one guessed from its column names (kept while the table is the same)."""
+        if name in self.specs:
+            return self.specs[name]
+        df = self.frame(name)
+        key = (name, id(df))
+        if key not in self._guessed:
+            role = "collars" if name == self.collars_name else self.role_of(name)
+            self._guessed[key] = _auto_spec(name, df, role)
+        return self._guessed[key]
+
+    def canonical(self, name: str) -> pd.DataFrame:
+        """A table with its role columns under the standard names and its kept value columns (`TableSpec.canonical`)."""
+        spec = self.spec_of(name)
+        return spec.canonical(self.frame(name), attributes=spec.kind in ("intervals", "points"))
+
+    def detect_dip(self) -> bool:
+        """The dip convention from the signs of the survey dips (else the collars'); True when they do not tell. Sets ``dip_note``."""
+        for name in ([self.surveys_name] if self.surveys is not None else []) + [self.collars_name]:
+            spec = self.spec_of(name)
+            if spec.column("dip"):
+                res = detect_dip_convention(self.frame(name), dip=spec.column("dip"), hole=spec.column("hole"))
+                if res["positive_down"] is not None:
+                    self.dip_note = f"Dips: {res['reason']}."
+                    return bool(res["positive_down"])
+        self.dip_note = "Dips: their signs do not tell; read as positive-down (geomodeltools' default)."
+        return True
 
     # ---- what is in it ---------------------------------------------------------------------------------------------------------
 
     def holes(self) -> set[str]:
         """The holes of the set: those of its collar table."""
-        return hole_ids(self.collars)
+        return hole_ids(self.collars, self.spec_of(self.collars_name).column("hole"))
 
     def tables(self) -> list[tuple[str, str]]:
         """(name, role) of every table in the set, collars first."""
@@ -99,68 +176,415 @@ class DrillholeSet:
         out += [(n, "intervals") for n in self.intervals] + [(n, "points") for n in self.points]
         return out
 
-    def share(self, df: pd.DataFrame) -> float:
+    def share(self, df: pd.DataFrame, spec: TableSpec | None = None) -> float:
         """The share of a table's holes that are in this set's collars (0 to 1; 0 for a table with no holes)."""
-        ids = hole_ids(df)
+        ids = hole_ids(df, spec.column("hole") if spec else None)
         return len(ids & self.holes()) / len(ids) if ids else 0.0
 
-    def missing(self, df: pd.DataFrame) -> set[str]:
+    def missing(self, df: pd.DataFrame, spec: TableSpec | None = None) -> set[str]:
         """Holes of a table that this set's collars do not have (their rows cannot be placed)."""
-        return hole_ids(df) - self.holes()
+        return hole_ids(df, spec.column("hole") if spec else None) - self.holes()
 
     # ---- changing it ------------------------------------------------------------------------------------------------------------
 
-    def add(self, name: str, df: pd.DataFrame, role: str | None = None) -> str:
-        """Put a table in the set, as ``role`` (found from its columns unless given): a survey replaces the set's survey table, an
-        interval or point table is added under ``name`` (replacing one of the same name). Returns the role. Collars cannot be added:
+    def add(self, name: str, df: pd.DataFrame, role: str | None = None, spec: TableSpec | None = None) -> str:
+        """Put a table in the set, as ``role`` (its spec's kind, else found from its columns): a survey replaces the set's survey table,
+        an interval or point table is added under ``name`` (replacing one of the same name). Returns the role. Collars cannot be added:
         a set has exactly one collar table (make a new set for another)."""
-        role = role or drillhole_role(df)
+        role = role or (spec.kind if spec else drillhole_role(df))
         if role not in ("surveys", "intervals", "points"):
             raise ValueError(f"{name}: a set takes a survey, interval or point table, not {role or 'this table'}; a collar table starts its own set")
-        if _has(df, HOLE_CANDIDATES) is None:
+        hole = spec.column("hole") if spec else find_column(df, None, HOLE_CANDIDATES, "", required=False)
+        if hole is None:
             raise ValueError(f"{name}: no hole id column (one of {', '.join(HOLE_CANDIDATES)})")
         self.remove(name)
         if role == "surveys":
+            if self.surveys is not None:
+                self.remove(self.surveys_name)
             self.surveys, self.surveys_name = df, name
         else:
             getattr(self, role)[name] = df
+        if spec is not None:
+            self.specs[name] = spec
         return role
 
     def remove(self, name: str) -> pd.DataFrame | None:
         """Take a survey, interval or point table out of the set (by the name it has in the set); returns it, or None if absent."""
+        df = None
         if self.surveys is not None and name == self.surveys_name:
             df, self.surveys, self.surveys_name = self.surveys, None, ""
-            return df
-        for group in (self.intervals, self.points):
-            if name in group:
-                return group.pop(name)
-        return None
+        else:
+            for group in (self.intervals, self.points):
+                if name in group:
+                    df = group.pop(name)
+                    break
+        if df is not None:
+            self.specs.pop(name, None)
+            self.unparsed.pop(name, None)
+        return df
 
     # ---- desurveyed ---------------------------------------------------------------------------------------------------------------
+
+    def collars_and_surveys(self) -> tuple:
+        """The collar and survey tables as `desurvey` takes them (`canonical`; surveys None when the set has none)."""
+        return self.canonical(self.collars_name), (self.canonical(self.surveys_name) if self.surveys is not None else None)
 
     def interval_table(self, name: str, **kw) -> pd.DataFrame:
         """An interval table of the set in real coordinates (`geomodeltools.drillholes.interval_table`: TOP/MID/BOTTOM X/Y/Z)."""
         from .drillholes import interval_table
 
-        return interval_table(self.collars, self.surveys, self.intervals[name], dip_positive_down=self.dip_positive_down, **kw)
+        c, s = self.collars_and_surveys()
+        return interval_table(c, s, self.canonical(name), dip_positive_down=self.dip_positive_down, **kw)
 
     def point_table(self, name: str, **kw) -> pd.DataFrame:
         """A point table of the set in real coordinates (`geomodeltools.drillholes.point_table`: X/Y/Z at each depth)."""
         from .drillholes import point_table
 
-        return point_table(self.collars, self.surveys, self.points[name], dip_positive_down=self.dip_positive_down, **kw)
+        c, s = self.collars_and_surveys()
+        p = self.canonical(name)
+        return point_table(c, s, p, depth="DEPTH", attributes=[x for x in p.columns if x not in ("HOLEID", "DEPTH")],
+                           dip_positive_down=self.dip_positive_down, **kw)
 
     def traces(self, **kw) -> list:
         """One `Polyline` per hole of the set (`geomodeltools.drillholes.traces`)."""
         from .drillholes import traces
 
-        return traces(self.collars, self.surveys, dip_positive_down=self.dip_positive_down, **kw)
+        c, s = self.collars_and_surveys()
+        return traces(c, s, dip_positive_down=self.dip_positive_down, **kw)
 
     def desurvey(self) -> dict[str, pd.DataFrame]:
         """Every interval and point table of the set in real coordinates, by name."""
         out = {n: self.interval_table(n) for n in self.intervals}
         out.update({n: self.point_table(n) for n in self.points})
         return out
+
+    # ---- checking it ---------------------------------------------------------------------------------------------------------------
+
+    def validate(self) -> list:
+        """Every problem of the set, errors first (`validate.validate_set`): a list of `Issue`."""
+        from .validate import validate_set
+
+        return validate_set(self)
+
+    def issues_frame(self) -> pd.DataFrame:
+        """`validate` as a table."""
+        from .validate import issues_frame
+
+        return issues_frame(self.validate())
+
+    # ---- from specs, and saved --------------------------------------------------------------------------------------------------
+
+    @classmethod
+    def from_specs(cls, name: str, *, collars: tuple, surveys: tuple | None = None, intervals: Mapping[str, tuple] | None = None,
+                   points: Mapping[str, tuple] | None = None, dip_positive_down: bool | None = None, crs: str | None = None) -> DrillholeSet:
+        """A set from confirmed specs: each table is a ``(TableSpec, DataFrame)`` pair (``intervals`` and ``points``: name -> pair). The
+        tables are typed as their specs say (`TableSpec.apply`; the values that could not be read are kept in ``unparsed``).
+        ``dip_positive_down`` None reads it from the dips' signs."""
+        unparsed, specs = {}, {}
+
+        def typed(pair, kind):
+            spec, df = pair
+            if spec.kind != kind:
+                raise ValueError(f"{spec.name}: its spec says it is a {spec.kind} table, given as {kind}")
+            missing = spec.missing_roles()
+            if missing:
+                raise ValueError(f"{spec.name}: no column for {', '.join(ROLE_LABELS[r] for r in missing)}")
+            table, bad = spec.apply(df, report=True)
+            specs[spec.name] = spec
+            if bad:
+                unparsed[spec.name] = bad
+            return spec.name, table
+
+        cname, ctable = typed(collars, "collars")
+        sname, stable = typed(surveys, "surveys") if surveys else ("", None)
+        ints = dict(typed(p, "intervals") for p in (intervals or {}).values())
+        pts = dict(typed(p, "points") for p in (points or {}).values())
+        return cls(name, ctable, stable, ints, pts, dip_positive_down=dip_positive_down, collars_name=cname, surveys_name=sname,
+                   specs=specs, unparsed=unparsed, crs=crs)
+
+    def to_spec(self, *, keep_dip: bool | None = None) -> SetSpec:
+        """The set's `SetSpec` (what `save` writes). The dip convention is saved when it was given, not when it was read from the signs
+        (``keep_dip`` True saves it either way)."""
+        t = {n: self.spec_of(n) for n, _ in self.tables()}
+        detected = self.dip_note.startswith("Dips:")
+        dip = self.dip_positive_down if (keep_dip or (keep_dip is None and not detected)) else None
+        return SetSpec(self.name, t[self.collars_name], t[self.surveys_name] if self.surveys is not None else None,
+                       [t[n] for n in self.intervals], [t[n] for n in self.points], dip_positive_down=dip, crs=self.crs)
+
+    def save(self, path) -> pathlib.Path:
+        """Write the set's specs to a set file (``.dhset.yaml``, or ``.json``) beside the data: what each table is and what its columns
+        are, never the data. Every table's spec needs its file (``path``): a file in the set file's folder (or below it) is saved relative
+        to it, so the folder can move; one elsewhere keeps its full path."""
+        from .setfile import write_setfile
+
+        path = pathlib.Path(path)
+        here = path.parent.resolve()
+        spec = self.to_spec()
+        for t in spec.tables():
+            if not t.path:
+                raise ValueError(f"{t.name}: its spec has no file (path=), so the set file could not find it again")
+            p = pathlib.Path(t.path)
+            p = (p if p.is_absolute() else pathlib.Path.cwd() / p).resolve()
+            try:
+                t.path = p.relative_to(here).as_posix()
+            except ValueError:  # not under the set file's folder
+                t.path = p.as_posix()
+        out = write_setfile(path, spec)
+        for t in spec.tables():  # the specs in the set keep full paths
+            t.path = (here / t.path).as_posix()
+        return out
+
+    @classmethod
+    def open(cls, path, *, accept_new: bool = True, table_names: str = "spec") -> DrillholeSet:
+        """A set from a set file: its tables read as their specs say, from beside the file. A table with columns its spec does not know
+        has them guessed (``accept_new``; they are listed in ``review``); a table that lost columns its spec names raises
+        `SpecMismatch`, saying which. ``table_names="file"`` names the tables by their file names (collar.csv) instead of their specs'."""
+        from .setfile import read_setfile
+        from .tables import read_table
+
+        path = pathlib.Path(path)
+        spec = read_setfile(path)
+        if table_names == "file":
+            for t in spec.tables():
+                t.name = pathlib.PurePath(t.path).name
+        frames, changes = {}, {}
+        for t in spec.tables():
+            df, _ = read_table(path.parent / t.path, t.parse)
+            change = t.check(df)
+            if change["missing"] or (change["new"] and not accept_new):
+                changes[t.name] = change
+            frames[t.name] = df
+        if changes:
+            lines = [f"{n}: " + "; ".join(f"{k} {', '.join(v)}" for k, v in c.items() if v) for n, c in changes.items()]
+            raise SpecMismatch(f"{path.name}: the tables changed since the set was saved ({' | '.join(lines)}); guess them again "
+                               "(guess_table) and save the set", changes)
+        review = {}
+        for t in spec.tables():
+            new = t.check(frames[t.name])["new"]
+            for c in new:
+                dtype = value_dtype(c, frames[t.name][c])
+                t.columns.append(ColumnSpec(c, dtype, unit=unit_of(c) if dtype == "number" else None))
+            if new:
+                review[t.name] = new
+        pair = lambda t: (t, frames[t.name])
+        s = cls.from_specs(spec.name, collars=pair(spec.collars), surveys=pair(spec.surveys) if spec.surveys else None,
+                           intervals={t.name: pair(t) for t in spec.intervals}, points={t.name: pair(t) for t in spec.points},
+                           dip_positive_down=spec.dip_positive_down, crs=spec.crs)
+        for t in spec.tables():  # paths as found, so a later save writes them again
+            t.path = (path.parent / t.path).as_posix()
+        s.review = review
+        return s
+
+    @classmethod
+    def onboard(cls, folder, files: Sequence[str], name: str | None = None, *, edits: Mapping[str, dict] | None = None,
+                threshold: float = REVIEW_BELOW, dip_positive_down: bool | None = None, templates: Sequence[TableSpec] = ()) -> DrillholeSet:
+        """Read, guess and confirm a set's tables in one call: one collar table, at most one survey table, and interval and point tables
+        (``files``, in ``folder``). When a guess is unsure (a column under ``threshold``, a missing role, a table that is not drillhole data)
+        it raises `NeedsReview`, saying which columns, with the guesses; pass ``edits={file: {column: {...}}}`` to confirm them (``{}``
+        accepts a guess). Tables are named by their file names without the extension."""
+        from .tables import read_table
+
+        folder = pathlib.Path(folder)
+        edits = dict(edits or {})
+        read = {f: read_table(folder / f) for f in files}
+        kinds = {f: table_kind(df) for f, (df, _) in read.items()}
+        collar_files = [f for f, k in kinds.items() if k == "collars"]
+        if len(collar_files) != 1:
+            raise ValueError(f"a set has one collar table; found {len(collar_files)} among {', '.join(files)}"
+                             + (" (use group_tables for several sets)" if collar_files else ""))
+        cfile = collar_files[0]
+        known = hole_ids(read[cfile][0])
+        guesses = {f: guess_table(df, pathlib.Path(f).stem, templates=templates, known_holes=None if f == cfile else known)
+                   for f, (df, _) in read.items()}
+        unsure = {}
+        for f, g in guesses.items():
+            asked = set(edits.get(f, {}))
+            todo = [c for c in g.needs_review(threshold) if c not in asked]
+            todo += [f"<no {ROLE_LABELS[r]} column>" for r in g.missing_roles() if r not in {e.get("role") for e in edits.get(f, {}).values()}]
+            if g.kind not in DRILLHOLE_KINDS:
+                todo = [f"<not drillhole data: {g.kind or 'no hole id'}>"]
+            if todo:
+                unsure[f] = todo
+        if [f for f, k in kinds.items() if k == "surveys"][1:]:
+            unsure["(set)"] = ["<more than one survey table>"]
+        if unsure:
+            lines = []
+            for f, cols in unsure.items():
+                g = guesses.get(f)
+                for c in cols:
+                    why = next((("; ".join(x.reasons)) for x in (g.columns if g else []) if x.name == c), "")
+                    lines.append(f"  {f}: {c}" + (f" ({why})" if why else ""))
+            example = next(((f, c) for f, cols in unsure.items() for c in cols if not c.startswith("<")), None)
+            hint = f", e.g. edits={{{example[0]!r}: {{{example[1]!r}: {{}}}}}}" if example else ""
+            raise NeedsReview("some columns need a look before the set is made:\n" + "\n".join(lines) +
+                              "\nconfirm them with edits={file: {column: {...}}} ({} accepts the guess, {'role': ...} gives one)" + hint,
+                              guesses, unsure)
+        specs = {f: g.to_spec(path=str((folder / f).resolve()), parse=read[f][1], edits=edits.get(f)) for f, g in guesses.items()}
+        pair = lambda f: (specs[f], read[f][0])
+        by = lambda k: [f for f in files if specs[f].kind == k]
+        return cls.from_specs(name or specs[cfile].name, collars=pair(cfile),
+                              surveys=pair(by("surveys")[0]) if by("surveys") else None,
+                              intervals={specs[f].name: pair(f) for f in by("intervals")},
+                              points={specs[f].name: pair(f) for f in by("points")}, dip_positive_down=dip_positive_down)
+
+    # ---- by column names: no guessing -----------------------------------------------------------------------------------------------
+
+    @classmethod
+    def from_columns(cls, collars, surveys=None, *, hole: str, x: str, y: str, z: str, length: str | None = None,
+                     collar_azimuth: str | None = None, collar_dip: str | None = None, at: str | None = None,
+                     azimuth: str | None = None, dip: str | None = None, survey_hole: str | None = None,
+                     dip_positive_down: bool | None = None, name: str = "drillholes", crs: str | None = None) -> DrillholeSet:
+        """A set from a collar and a survey table (each a file or a DataFrame) whose columns are named, not guessed.
+
+        Collars: ``hole``, ``x``, ``y``, ``z``; ``length`` (hole length) is optional: when not given, a column with a usual name for it
+        (MAX_DEPTH, LENGTH, EOH...) is used if there is one, and otherwise each hole ends at its deepest survey station.
+        ``collar_azimuth`` / ``collar_dip`` orient the holes that have no survey rows. Surveys: ``at`` (the depth of each station),
+        ``azimuth``, ``dip``, and ``survey_hole`` when the survey names the hole id column differently (else ``hole``). Without
+        ``surveys``, every hole is oriented by its collar's azimuth and dip. ``dip_positive_down`` None reads the convention from the
+        dips' signs (said in ``dip_note``).
+
+        A name that is not a column raises a `KeyError` listing the table's columns. The other columns are kept, their types guessed
+        (number, category, text, date). Tables given as files keep their paths, so the set can be `save`d and opened again.
+        """
+        ctable, cparse, cpath = _table_of(collars)
+        if length is None:
+            from .columns import LENGTH_CANDIDATES
+
+            length = find_column(ctable, None, LENGTH_CANDIDATES, "", required=False)
+            if length in (hole, x, y, z, collar_azimuth, collar_dip):
+                length = None
+        croles = {"hole": hole, "x": x, "y": y, "z": z, "length": length, "azimuth": collar_azimuth, "dip": collar_dip}
+        pair_c = (_named_spec(_stem(collars, f"{name} collars"), "collars", ctable, croles, cpath, cparse), ctable)
+        pair_s = None
+        if surveys is not None:
+            missing = [k for k, v in (("at", at), ("azimuth", azimuth), ("dip", dip)) if v is None]
+            if missing:
+                raise TypeError(f"from_columns: with a survey table, name its {', '.join(missing)} column(s)")
+            stable, sparse, spath = _table_of(surveys)
+            sroles = {"hole": survey_hole or hole, "depth": at, "azimuth": azimuth, "dip": dip}
+            pair_s = (_named_spec(_stem(surveys, f"{name} surveys"), "surveys", stable, sroles, spath, sparse), stable)
+        elif collar_azimuth is None or collar_dip is None:
+            raise TypeError("from_columns: without a survey table, name the collar_azimuth and collar_dip columns")
+        return cls.from_specs(name, collars=pair_c, surveys=pair_s, dip_positive_down=dip_positive_down, crs=crs)
+
+    def desurvey_table(self, table, *, hole: str, from_: str, to: str | None = None, name: str | None = None,
+                       warn: bool = True) -> pd.DataFrame:
+        """A table (a file or a DataFrame) of the set's holes in real coordinates, by minimum curvature: every row and column as given,
+        names and order kept, plus TOP_X/Y/Z (at ``from_``), MID_X/Y/Z (half way along the hole) and BOTTOM_X/Y/Z (at ``to``); with
+        ``to`` None, the table holds points at depth ``from_`` along the hole and gets X, Y, Z.
+
+        Rows of holes that cannot be placed (not in the collars, a repeated survey depth, no survey) keep empty coordinates; the holes
+        and why are in ``result.attrs["skipped"]`` (and a warning, unless ``warn`` is False). ``name`` also adds the table to the set
+        under that name (`add`), so `save` keeps it.
+        """
+        from .desurvey import desurvey_intervals
+        from .drillholes import INTERVAL_POSITIONS, _positions
+
+        df, parse, path = _table_of(table)
+        _need(df, [hole, from_] + ([to] if to else []), "the table")
+        out_cols = ["X", "Y", "Z"] if to is None else [f"{label}_{a}" for label in INTERVAL_POSITIONS.values() for a in "XYZ"]
+        clash = [c for c in out_cols if c in df.columns]
+        if clash:
+            raise ValueError(f"the table already has column(s) {', '.join(clash)}; rename them first")
+        start = pd.to_numeric(df[from_], errors="coerce").to_numpy(float)
+        tmp = pd.DataFrame({"HOLEID": df[hole].astype(str).str.strip().to_numpy(), "FROM": start,
+                            "TO": start if to is None else pd.to_numeric(df[to], errors="coerce").to_numpy(float)})
+        c, s = self.collars_and_surveys()
+        known = set(c["HOLEID"])
+        no_collar = sorted(set(tmp.loc[~tmp.HOLEID.isin(known), "HOLEID"]))
+        ok = (tmp.HOLEID.isin(known) & tmp.FROM.notna() & tmp.TO.notna()).to_numpy()
+        coords = pd.DataFrame(float("nan"), index=range(len(df)), columns=out_cols)
+        skipped = pd.Series(dict.fromkeys(no_collar, "no collar"), dtype=object)
+        if ok.any():
+            d = desurvey_intervals(c, s, tmp[ok].reset_index(drop=True), hole="HOLEID", from_="FROM", to="TO", attributes=[],
+                                   dip_positive_down=self.dip_positive_down, warn=warn, stacklevel=3)
+            got = d.intervals
+            rows = ok.nonzero()[0][got["_row"].to_numpy()]
+            if to is None:
+                values = got[["start_x", "start_y", "start_z"]].to_numpy()
+            else:
+                values = pd.DataFrame(_positions(got))[out_cols].to_numpy()
+            coords.iloc[rows] = values
+            skipped = pd.concat([skipped, d.skipped[d.skipped.index.isin(set(tmp.HOLEID))]])
+        if no_collar and warn:
+            import warnings
+
+            warnings.warn(f"{len(no_collar)} holes of the table have no collar; their rows have no coordinates "
+                          f"(e.g. {no_collar[0]!r})", stacklevel=2)
+        result = pd.concat([df.reset_index(drop=True), coords], axis=1)
+        result.attrs["skipped"] = skipped.rename("reason")
+        if name is not None:
+            kind = "points" if to is None else "intervals"
+            roles = {"hole": hole, "depth": from_} if to is None else {"hole": hole, "from": from_, "to": to}
+            self.add(name, df, kind, _named_spec(name, kind, df, roles, path, parse))
+        return result
+
+
+def _table_of(source):
+    """``(DataFrame, ParseOptions or None, resolved path or None)`` of a file or a DataFrame."""
+    if isinstance(source, pd.DataFrame):
+        return source, None, None
+    from .tables import read_table
+
+    path = pathlib.Path(source)
+    df, parse = read_table(path)
+    return df, parse, str(path.resolve())
+
+
+def _stem(source, default: str) -> str:
+    return default if isinstance(source, pd.DataFrame) else pathlib.Path(source).stem
+
+
+def _need(df: pd.DataFrame, names, what: str) -> None:
+    missing = [n for n in names if n not in df.columns]
+    if missing:
+        raise KeyError(f"{what} has no column {', '.join(map(repr, missing))}; its columns are {', '.join(map(str, df.columns))}")
+
+
+def _named_spec(name: str, kind: str, df: pd.DataFrame, roles: Mapping[str, str | None], path, parse) -> TableSpec:
+    """A spec whose role columns are the ones named (by the user); the other columns keep their names, their types guessed."""
+    from .schema import role_dtype
+
+    roles = {r: c for r, c in roles.items() if c is not None}
+    _need(df, list(roles.values()), f"table {name!r}")
+    by_col = {c: r for r, c in roles.items()}
+    if len(by_col) < len(roles):
+        raise ValueError(f"table {name!r}: one column is named for two roles ({roles})")
+    cols = []
+    for c in df.columns:
+        r = by_col.get(c)
+        if r is not None:
+            cols.append(ColumnSpec(str(c), role_dtype(r), role=r, source="user"))
+        else:
+            dtype = value_dtype(c, df[c])
+            cols.append(ColumnSpec(str(c), dtype, unit=unit_of(str(c)) if dtype == "number" else None))
+    spec = TableSpec(name, kind, cols, path=path)
+    if parse is not None:
+        spec.parse = parse
+    return spec
+
+
+# ---- sorting tables into sets ---------------------------------------------------------------------------------------------------
+
+
+def best_set(df: pd.DataFrame, sets: Sequence[DrillholeSet], role: str, *, spec: TableSpec | None = None, min_share: float = MIN_SHARE,
+             margin: float = MARGIN):
+    """The set a survey, interval or point table belongs to: ``(set, "", scores)``, or ``(None, why, scores)`` when unclear (no set, too
+    few of its holes in any set's collars, two sets about equally, or a second survey for the set). ``scores``: (set name, share of the
+    table's holes in its collars), best first."""
+    scores = sorted(((s, round(s.share(df, spec), 3)) for s in sets), key=lambda x: -x[1])
+    named = [(s.name, v) for s, v in scores]
+    if not scores:
+        return None, "there is no collar table to join (load one, or say which set it belongs to)", named
+    best, share = scores[0]
+    second = scores[1][1] if len(scores) > 1 else 0.0
+    if share < min_share:
+        return None, f"only {share:.0%} of its holes are in the collars of {best.name!r}", named
+    if share - second < margin:
+        return None, f"its holes are in the collars of {best.name!r} and {scores[1][0].name!r} about equally", named
+    if role == "surveys" and best.surveys is not None:
+        return None, f"{best.name!r} already has a survey table ({best.surveys_name})", named
+    return best, "", named
 
 
 @dataclass
@@ -182,53 +606,45 @@ class Grouping:
     other: dict
 
 
-def _unique(name: str, taken: set[str]) -> str:
+def unique_name(name: str, taken) -> str:
+    """``name``, or ``name (2)``, ``name (3)``... if it is taken (any case)."""
+    taken = {t.casefold() for t in taken}
     out, k = name, 2
-    while out.casefold() in {t.casefold() for t in taken}:
+    while out.casefold() in taken:
         out, k = f"{name} ({k})", k + 1
     return out
 
 
 def group_tables(tables: Mapping[str, pd.DataFrame], sets: Sequence[DrillholeSet] = (), *, roles: Mapping[str, str] | None = None,
-                 min_share: float = MIN_SHARE, margin: float = MARGIN, dip_positive_down: bool = True) -> Grouping:
+                 specs: Mapping[str, TableSpec] | None = None, min_share: float = MIN_SHARE, margin: float = MARGIN,
+                 dip_positive_down: bool = True) -> Grouping:
     """Sort tables (name -> DataFrame, e.g. files just loaded) into drillhole sets, the existing ``sets`` first.
 
-    Each collar table starts a new set, named after it. A survey, interval or point table joins the set whose collars hold the
-    largest share of its holes, when that share is at least ``min_share`` and beats the next set's by ``margin``; otherwise, or
-    when the set already has a survey table, it is returned in ``unsure`` (nothing guessed). ``roles`` (name -> role) overrides what
-    `drillhole_role` finds, e.g. after the user said what a table is. ``dip_positive_down`` is given to the new sets."""
-    roles = dict(roles or {})
+    Each collar table starts a new set, named after it. A survey, interval or point table joins the set `best_set` finds; otherwise it
+    is returned in ``unsure`` (nothing guessed). ``roles`` (name -> role) overrides what `drillhole_role` finds, e.g. after the user said
+    what a table is; ``specs`` (name -> `TableSpec`) gives tables their confirmed specs (and so their roles).
+    ``dip_positive_down`` is given to the new sets."""
+    roles, specs = dict(roles or {}), dict(specs or {})
     out = list(sets)
     unsure, other = [], {}
     found = {}
     for name, df in tables.items():
-        role = roles.get(name) or drillhole_role(df)
+        role = roles.get(name) or (specs[name].kind if name in specs else drillhole_role(df))
         if role not in ROLES:
             other[name] = "not drillhole data (no hole id with from/to, depth, or a collar position)" if role is None else f"unknown role {role!r}"
             continue
         found[name] = role
     for name, role in found.items():          # collars first: they make the sets the other tables join
         if role == "collars":
-            taken = {s.name for s in out}
-            out.append(DrillholeSet(_unique(name, taken), tables[name], dip_positive_down=dip_positive_down, collars_name=name))
+            s = DrillholeSet(unique_name(name, {s.name for s in out}), tables[name], dip_positive_down=dip_positive_down, collars_name=name,
+                             specs={name: specs[name]} if name in specs else {})
+            out.append(s)
     order = sorted((n for n, r in found.items() if r != "collars"), key=lambda n: ("surveys", "intervals", "points").index(found[n]))
     for name in order:
         role, df = found[name], tables[name]
-        scores = sorted(((s.name, round(s.share(df), 3)) for s in out), key=lambda x: -x[1])
-        if not scores:
-            unsure.append(Unsure(name, role, [], "there is no collar table to join (load one, or say which set it belongs to)"))
+        target, why, scores = best_set(df, out, role, spec=specs.get(name), min_share=min_share, margin=margin)
+        if target is None:
+            unsure.append(Unsure(name, role, scores, why))
             continue
-        best, share = scores[0]
-        second = scores[1][1] if len(scores) > 1 else 0.0
-        if share < min_share:
-            unsure.append(Unsure(name, role, scores, f"only {share:.0%} of its holes are in the collars of {best!r}"))
-            continue
-        if share - second < margin:
-            unsure.append(Unsure(name, role, scores, f"its holes are in the collars of {best!r} and {scores[1][0]!r} about equally"))
-            continue
-        target = next(s for s in out if s.name == best)
-        if role == "surveys" and target.surveys is not None:
-            unsure.append(Unsure(name, role, scores, f"{best!r} already has a survey table ({target.surveys_name})"))
-            continue
-        target.add(name, df, role)
+        target.add(name, df, role, spec=specs.get(name))
     return Grouping(out, unsure, other)
