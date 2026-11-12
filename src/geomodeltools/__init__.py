@@ -24,6 +24,7 @@ _LAZY = {
     "plot_soft_boundary_boxplots": "soft_boundary", "soft_boundary_pairs": "soft_boundary", "soft_boundary_values": "soft_boundary",
     "Desurveyed": "desurvey", "desurvey_intervals": "desurvey",
     "interval_table": "drillholes", "point_table": "drillholes", "traces": "drillholes", "Polyline": "shapes",
+    "DrillholeSet": "drillholesets", "group_tables": "drillholesets", "drillhole_role": "drillholesets", "hole_ids": "drillholesets",
     "PointSet": "shapes", "LineSet": "shapes", "Surface": "shapes", "write_omf": "omf_io", "read_omf": "omf_io",
     "write_dxf": "export", "write_obj": "export", "write_csv": "export", "dxf_layer_name": "export",
     "latlon_to_xy": "collars", "block_model_bounds": "collars", "dem_for_block_model": "collars", "sample_dem_z": "collars",
