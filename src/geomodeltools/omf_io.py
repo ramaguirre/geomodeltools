@@ -43,8 +43,8 @@ class _Writer:
         self.f.write(zlib.compress(np.ascontiguousarray(a, dtype=dtype).tobytes()))
         return self.add(cls, array={"start": start, "dtype": dtype, "length": self.f.tell() - start})
 
-    def element(self, e, colour) -> str:
-        common = {"name": e.name, "description": "", "color": list(colour)}
+    def element(self, e, colour, description: str = "") -> str:
+        common = {"name": e.name, "description": description, "color": list(colour)}
         vertices = self.array("Vector3Array", e.vertices, "<f8")
         if isinstance(e, PointSet):
             data = [self.add("ScalarData", name=k, description="", array=self.array("ScalarArray", v, "<f8"), location="vertices")
@@ -64,15 +64,20 @@ class _Writer:
         return self.add("SurfaceElement", **common, data=[], textures=[], subtype="surface", geometry=geometry)
 
 
-def write_omf(path, elements, *, name: str = "", description: str = "", units: str = "") -> Path:
+def write_omf(path, elements, *, name: str = "", description: str = "", units: str = "", curve_step: float = 1.0) -> Path:
     """Write `PointSet`, `LineSet`, `Surface` and `Polyline` objects to an OMF v1 file; returns the path.
 
     Each object is one OMF element, in order. A `Polyline` becomes a line set of its own; to put many polylines (drillhole traces,
     say) in one element, pass ``LineSet.from_polylines(name, polylines)``. ``name``, ``description`` and ``units`` (e.g. "m")
     describe the project.
+
+    A curved `Polyline` (Bezier handles) is written as points along its curve, about ``curve_step`` m apart, so any OMF reader
+    (Leapfrog, say) shows its shape; its vertices, handles and sides go into the element's description as JSON
+    (``{"geomodeltools_polyline": 1, ...}``), from which `read_omf` gives the editable polyline back.
     """
     path = Path(path)
-    elements = [LineSet.from_polylines(e.name, [e]) if isinstance(e, Polyline) else e for e in elements]
+    notes = [_curve_note(e) if isinstance(e, Polyline) and (e.curved or e.normals is not None) else "" for e in elements]
+    elements = [LineSet.from_polylines(e.name, [e], curve_step=curve_step) if isinstance(e, Polyline) else e for e in elements]
     for e in elements:
         if not isinstance(e, (PointSet, LineSet, Surface)):
             raise TypeError(f"cannot write {type(e).__name__} to OMF; expected PointSet, LineSet, Surface or Polyline")
@@ -80,7 +85,7 @@ def write_omf(path, elements, *, name: str = "", description: str = "", units: s
     with open(path, "wb") as f:
         f.write(MAGIC + struct.pack("<32s", VERSION) + project.bytes + struct.pack("<Q", 0))
         w = _Writer(f)
-        uids = [w.element(e, COLOURS[k % len(COLOURS)]) for k, e in enumerate(elements)]
+        uids = [w.element(e, COLOURS[k % len(COLOURS)], notes[k]) for k, e in enumerate(elements)]
         w.index[str(project)] = {"date_created": w.now, "date_modified": w.now, "name": name, "description": description,
                                  "author": "", "revision": "", "units": units, "elements": uids, "origin": [0.0, 0.0, 0.0],
                                  "__class__": "Project"}
@@ -91,9 +96,32 @@ def write_omf(path, elements, *, name: str = "", description: str = "", units: s
     return path
 
 
+def _curve_note(p: Polyline) -> str:
+    note = {"geomodeltools_polyline": 1, "vertices": p.vertices.tolist()}
+    if p.controls is not None:
+        note["controls"] = p.controls.tolist()
+    if p.normals is not None:
+        note["normals"] = p.normals.tolist()
+    return json.dumps(note)
+
+
+def _polyline_from_note(name: str, description: str):
+    """The editable polyline `write_omf` noted in a line set's description, or None (any other description)."""
+    if not description.startswith("{"):
+        return None
+    try:
+        note = json.loads(description)
+    except ValueError:
+        return None
+    if not isinstance(note, dict) or note.get("geomodeltools_polyline") != 1:
+        return None
+    return Polyline(name, note["vertices"], note.get("controls"), note.get("normals"))
+
+
 def read_omf(path) -> list:
     """The point sets, line sets and triangulated surfaces of an OMF v1 file, in project order, as `PointSet`, `LineSet` and
-    `Surface` objects in real coordinates (the project and geometry origins added). A point set keeps its scalar data on vertices,
+    `Surface` objects in real coordinates (the project and geometry origins added). A curved polyline written by `write_omf`
+    comes back as that `Polyline`, handles and sides included (its vertices in the coordinates it was written in). A point set keeps its scalar data on vertices,
     a line set its scalar and text data on segments (e.g. which hole each trace segment belongs to); other data, and elements of other kinds (volumes, gridded surfaces), are left out with a warning."""
     raw = Path(path).read_bytes()
     if raw[:4] != MAGIC:
@@ -130,6 +158,10 @@ def read_omf(path) -> list:
                     left_out.append(f"data {d.get('name', '')!r} of {name!r} ({d['__class__']})")
             out.append(PointSet(name, vertices, data))
         elif cls == "LineSetElement":
+            curve = _polyline_from_note(name, e.get("description", ""))
+            if curve is not None:
+                out.append(curve)
+                continue
             data = {}
             for d in map(index.get, e.get("data", [])):
                 if d["__class__"] == "ScalarData" and d.get("location") == "segments":

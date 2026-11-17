@@ -2,6 +2,8 @@
 
 DXF needs the optional extra ``[dxf]`` (ezdxf); OBJ and CSV need nothing beyond the base install. Polylines become DXF 3D polylines
 and OBJ ``l`` lines; surfaces become DXF 3D faces and OBJ faces. A `LineSet` is written as its polylines (`LineSet.to_polylines`).
+A curved polyline (Bezier handles) is written as points along its curve, about ``curve_step`` m apart: DXF and OBJ keep its
+shape, not its handles or sides (`write_omf` keeps those).
 """
 from __future__ import annotations
 
@@ -13,11 +15,13 @@ import pandas as pd
 from .shapes import LineSet, Polyline, Surface
 
 
-def _shapes(elements) -> list:
+def _shapes(elements, curve_step: float = 1.0) -> list:
     out = []
     for e in elements:
         if isinstance(e, LineSet):
             out.extend(e.to_polylines())
+        elif isinstance(e, Polyline) and e.curved:
+            out.append(Polyline(e.name, e.curve_points(curve_step)))
         elif isinstance(e, (Polyline, Surface)):
             out.append(e)
         else:
@@ -31,7 +35,7 @@ def dxf_layer_name(name: str) -> str:
     return name or "0"
 
 
-def write_dxf(path, elements, *, layer: str | None = None) -> Path:
+def write_dxf(path, elements, *, layer: str | None = None, curve_step: float = 1.0) -> Path:
     """Write polylines (3D polylines) and surfaces (one 3D face per triangle) to a DXF file; returns the path.
 
     Each element goes on the layer named after it (made valid with `dxf_layer_name`), or all on ``layer`` if given. Needs ezdxf:
@@ -41,7 +45,7 @@ def write_dxf(path, elements, *, layer: str | None = None) -> Path:
         import ezdxf
     except ModuleNotFoundError as e:
         raise ImportError("write_dxf needs the optional package 'ezdxf': pip install geomodeltools[dxf]") from e
-    shapes = _shapes(elements)
+    shapes = _shapes(elements, curve_step)
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
     for s in shapes:
@@ -59,10 +63,10 @@ def write_dxf(path, elements, *, layer: str | None = None) -> Path:
     return path
 
 
-def write_obj(path, elements) -> Path:
+def write_obj(path, elements, *, curve_step: float = 1.0) -> Path:
     """Write polylines (``l`` lines) and surfaces (``f`` faces) to a Wavefront OBJ file, one ``o`` object per element named after
     it (spaces become ``_``); returns the path. Coordinates are written in full (shortest exact decimal of each float64)."""
-    shapes = _shapes(elements)
+    shapes = _shapes(elements, curve_step)
     lines, start = [], 1
     for s in shapes:
         lines.append("o " + (re.sub(r"\s+", "_", s.name.strip()) or "object"))

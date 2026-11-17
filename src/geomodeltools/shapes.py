@@ -21,18 +21,86 @@ def _vertices(v, what: str, at_least: int) -> np.ndarray:
 
 @dataclass(eq=False)
 class Polyline:
-    """A named 3D polyline: ``vertices`` is N x 3 float64 (N >= 2), in order along the line."""
+    """A named 3D polyline: ``vertices`` is N x 3 float64 (N >= 2), in order along the line.
+
+    Optionally a curve and sides, as drawn with Bezier handles (geoview's ``edit_polyline(curve=True, sides=True)``):
+
+    - ``controls`` N x 2 x 3: the [incoming, outgoing] handle of each vertex. Segment k is the cubic Bezier curve through
+      ``vertices[k]``, ``controls[k, 1]``, ``controls[k + 1, 0]``, ``vertices[k + 1]``; it passes through the vertices. ``None``
+      (the default): straight segments. The first vertex's incoming and the last vertex's outgoing handle are not used.
+    - ``normals`` N x 3: the side each vertex faces (e.g. the younger side of a contact). ``None``: no sides.
+
+    Files that only hold straight segments (DXF, OBJ, the OMF geometry) get the curve as points along it (`curve_points`), so
+    other software shows its true shape; OMF also keeps the handles and sides for geomodeltools to read back (`write_omf`).
+    """
     name: str
     vertices: np.ndarray
+    controls: np.ndarray | None = None
+    normals: np.ndarray | None = None
 
     def __post_init__(self):
         self.name = str(self.name)
         self.vertices = _vertices(self.vertices, f"polyline {self.name!r}", 2)
+        n = len(self.vertices)
+        if self.controls is not None:
+            c = np.array(self.controls, dtype=np.float64)
+            if c.shape != (n, 2, 3):
+                raise ValueError(f"polyline {self.name!r}: controls must be N x 2 x 3 = ({n}, 2, 3), got shape {c.shape}")
+            self.controls = c
+        if self.normals is not None:
+            m = np.array(self.normals, dtype=np.float64)
+            if m.shape != (n, 3):
+                raise ValueError(f"polyline {self.name!r}: normals must be N x 3 = ({n}, 3), got shape {m.shape}")
+            self.normals = m
+        for what, a in (("vertices", self.vertices), ("controls", self.controls), ("normals", self.normals)):
+            if a is not None and not np.isfinite(a).all():
+                raise ValueError(f"polyline {self.name!r}: {what} must be finite")
+
+    @classmethod
+    def from_edit(cls, edit) -> Polyline:
+        """A polyline from anything with ``name``, ``vertices`` and optionally ``controls`` / ``normals`` (geoview's
+        ``PolylineEdit``, say), handles and sides included."""
+        return cls(edit.name, edit.vertices, getattr(edit, "controls", None), getattr(edit, "normals", None))
+
+    @property
+    def curved(self) -> bool:
+        """True if the polyline has Bezier handles (``controls``)."""
+        return self.controls is not None
+
+    def curve_points(self, step: float = 1.0) -> np.ndarray:
+        """The line as points along it (M x 3): the vertices themselves if it is straight; for a curve, each segment cut into
+        equal steps of its parameter, about ``step`` metres apart along the curve, every vertex included exactly."""
+        if not self.curved:
+            return self.vertices.copy()
+        if step <= 0:
+            raise ValueError("step must be > 0")
+        v, c = self.vertices, self.controls
+        out = [v[:1]]
+        for k in range(len(v) - 1):
+            seg = (v[k], c[k, 1], c[k + 1, 0], v[k + 1])
+            n = max(1, int(np.ceil(_bezier_length(seg) / step)))
+            out.append(_bezier(seg, np.arange(1, n + 1) / n))
+        out = np.vstack(out)
+        out[-1] = v[-1]
+        return out
 
     @property
     def length(self) -> float:
-        """Total length along the vertices."""
-        return float(np.linalg.norm(np.diff(self.vertices, axis=0), axis=1).sum())
+        """Total length along the line (along the curve if it has handles)."""
+        p = self.curve_points(0.05) if self.curved else self.vertices
+        return float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum())
+
+
+def _bezier(seg, t) -> np.ndarray:
+    """Points of the cubic Bezier ``seg`` = (p0, c0, c1, p1) at parameters ``t``."""
+    t = np.asarray(t, dtype=np.float64)[:, None]
+    u = 1 - t
+    p0, c0, c1, p1 = seg
+    return u ** 3 * p0 + 3 * u * u * t * c0 + 3 * u * t * t * c1 + t ** 3 * p1
+
+
+def _bezier_length(seg) -> float:
+    return float(np.linalg.norm(np.diff(_bezier(seg, np.linspace(0, 1, 129)), axis=0), axis=1).sum())
 
 
 def _indices(i, n_vertices: int, width: int, what: str) -> np.ndarray:
@@ -85,14 +153,16 @@ class LineSet:
                 raise ValueError(f"line set {self.name!r}: data {k!r} has {len(v)} values for {len(self.segments)} segments")
 
     @classmethod
-    def from_polylines(cls, name: str, polylines, *, names_as: str | None = "name") -> LineSet:
+    def from_polylines(cls, name: str, polylines, *, names_as: str | None = "name", curve_step: float = 1.0) -> LineSet:
         """One line set holding several polylines (drillhole traces, say), each a chain of segments. Each segment keeps the name of
-        its polyline in ``data[names_as]`` (``None``: not kept), so the polylines can be told apart (e.g. ``names_as="HOLEID"``)."""
+        its polyline in ``data[names_as]`` (``None``: not kept), so the polylines can be told apart (e.g. ``names_as="HOLEID"``).
+        A curved polyline enters as points along its curve, about ``curve_step`` m apart (`Polyline.curve_points`)."""
         polylines = list(polylines)
         verts, segs, labels, start = [], [], [], 0
         for p in polylines:
-            n = len(p.vertices)
-            verts.append(p.vertices)
+            pts = p.curve_points(curve_step)
+            n = len(pts)
+            verts.append(pts)
             segs.append(start + np.column_stack([np.arange(n - 1), np.arange(1, n)]))
             labels += [p.name] * (n - 1)
             start += n

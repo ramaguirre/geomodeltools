@@ -168,6 +168,23 @@ still tell the holes apart. Everything stays in real coordinates: float64 keeps 
 zlib-compressed arrays and a JSON index. The tests check that the `omf` package itself opens these files; it is a test
 dependency only.
 
+**Curved polylines and sides.** A `Polyline` can also carry Bezier handles and sides, as drawn in geoview
+(`edit_polyline(curve=True, sides=True)`): `controls` (N x 2 x 3, the incoming and outgoing handle of each vertex; segment k
+is the cubic Bezier through `vertices[k]`, `controls[k, 1]`, `controls[k + 1, 0]`, `vertices[k + 1]`) and `normals` (N x 3,
+the side each vertex faces). Both are optional; without them a polyline is straight segments, as before.
+
+```python
+line = Polyline.from_edit(edit)            # geoview's PolylineEdit: handles and sides kept
+line.curved, line.length                   # length along the curve
+line.curve_points(step=1.0)                # points along the curve, about 1 m apart, vertices included
+write_omf("lines.omf", [line])             # other software sees the curve; read_omf gives back the editable line
+write_dxf("lines.dxf", [line])             # DXF and OBJ: the curve's shape only (points along it), no handles or sides
+```
+
+In OMF the line's geometry is the points along the curve, so Leapfrog and other readers show its true shape; the vertices,
+handles and sides are kept as JSON in the element's description (`{"geomodeltools_polyline": 1, ...}`), which `read_omf`
+turns back into the curved `Polyline`.
+
 ### Drillhole sets
 
 A set is one collar table, at most one survey table (without one, each hole is oriented by its collar's azimuth and dip), and
