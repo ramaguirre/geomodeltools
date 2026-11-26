@@ -89,3 +89,46 @@ def test_bad_map_scale_raises(bad):
 def test_increments_without_repeats_raises():
     with pytest.raises(ValueError, match="together"):
         _run(_polys(), increments=(10, 50))
+
+
+def test_ring_points_carry_nominal_distance_and_ring_index():
+    out = _run(_polys(), map_scale=100_000, adaptive=True)
+    rings = out[(out["unit"] == "wide") & (out["point_source"] == "ring")]
+    # 1:100,000 -> buffers 50, 100, then every 200 m
+    assert sorted(rings["buffer_distance"].unique())[:4] == [50.0, 100.0, 300.0, 500.0]
+    first = rings[rings["ring_index"] == 1]
+    assert (first["buffer_distance"] == 50.0).all()
+    assert rings.groupby("ring_index")["buffer_distance"].nunique().eq(1).all()
+    assert out.loc[out["point_source"] != "ring", "ring_index"].isna().all()
+
+
+def test_default_call_also_has_distance_and_ring_index():
+    out = _run(_polys(), map_scale=100_000)
+    assert {"buffer_distance", "ring_index"} <= set(out.columns)
+    assert (out["buffer_distance"] > 0).all()
+
+
+def test_adaptive_ring_distance_is_its_fraction_of_half_width():
+    poly = box(0, 0, 3000, 120)                       # half-width 3000*120 / 6240 ~ 57.7 m: one 50 m ring only
+    gdf = gpd.GeoDataFrame({"unit": ["u"]}, geometry=[poly], crs=CRS)
+    out = _run(gdf, map_scale=100_000, adaptive=True)
+    ad = out[out["point_source"] == "adaptive_ring"]
+    assert len(ad) > 0
+    assert ad["buffer_distance"].round(6).eq(round(0.4 * poly.area / poly.length, 6)).all()
+
+
+def test_centreline_distance_measured_and_points_stay_inside_unsimplified_polygon():
+    # a thin wavy band: the simplification tolerance (25 m at 1:100,000) is close to its half-width,
+    # so a centreline built on the simplified outline would cross the real edge
+    import numpy as np
+    from shapely.geometry import LineString
+    xs = np.linspace(0, 4000, 400)
+    band = LineString(np.column_stack([xs, 60 * np.sin(xs / 150)])).buffer(30, cap_style="flat")
+    gdf = gpd.GeoDataFrame({"unit": ["band"]}, geometry=[band], crs=CRS)
+    out = _run(gdf, map_scale=100_000, adaptive=True)
+    pts = gpd.points_from_xy(out["x"], out["y"])
+    assert band.buffer(1e-6).contains(pts).all()
+    cl = out[out["point_source"] == "centreline"]
+    assert len(cl) > 0
+    measured = band.boundary.distance(gpd.points_from_xy(cl["x"], cl["y"]))
+    assert np.allclose(cl["buffer_distance"], measured)
