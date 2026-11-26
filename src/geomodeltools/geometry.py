@@ -336,8 +336,11 @@ def _adaptive_layers(gdf, configured_buffers, narrow_half_width, min_half_width,
     """Extra geometries for polygons too narrow for the configured buffers.
 
     Returns a GeoDataFrame of polygons (extra inward rings), lines
-    (centrelines) and points (fallback), carrying the input attributes and a
-    `_source` column.
+    (centrelines) and points (fallback), carrying the input attributes and
+    `_source`, `_buffer_distance` (the adaptive ring's own inward distance,
+    negative like the configured buffers; NaN for the others) and `_ring_index`
+    (NaN). Pass the unsimplified polygons: these geometries sit closer to the
+    edge than the simplification tolerance and would otherwise cross it.
     """
     parts = gdf.explode(ignore_index=True)
     second = configured_buffers[1] if len(configured_buffers) > 1 else configured_buffers[0]
@@ -353,17 +356,20 @@ def _adaptive_layers(gdf, configured_buffers, narrow_half_width, min_half_width,
         if few_rings and half_width >= min_half_width:
             ring = poly.buffer(-ring_fraction * half_width)
             if not ring.is_empty:
-                rows.append({**row.to_dict(), "geometry": ring, "_source": "adaptive_ring"})
+                rows.append({**row.to_dict(), "geometry": ring, "_source": "adaptive_ring",
+                             "_buffer_distance": -ring_fraction * half_width, "_ring_index": np.nan})
                 produced = True
 
         if half_width < narrow_half_width:
             line = _centreline(poly, spacing)
             if line is not None:
-                rows.append({**row.to_dict(), "geometry": line, "_source": "centreline"})
+                rows.append({**row.to_dict(), "geometry": line, "_source": "centreline",
+                             "_buffer_distance": np.nan, "_ring_index": np.nan})
                 produced = True
 
         if not produced:
-            rows.append({**row.to_dict(), "geometry": poly.point_on_surface(), "_source": "fallback_point"})
+            rows.append({**row.to_dict(), "geometry": poly.point_on_surface(), "_source": "fallback_point",
+                         "_buffer_distance": np.nan, "_ring_index": np.nan})
 
     if not rows:
         return None
@@ -437,10 +443,12 @@ def bufferize_2d_polygons(
           without points.
 
         Adds a ``point_source`` column: ``ring``, ``adaptive_ring``,
-        ``centreline`` or ``fallback_point``.
+        ``centreline`` or ``fallback_point``. Adaptive geometries are built
+        from the unsimplified polygons, so they stay inside them.
     simplify_tolerance : float, optional
         Douglas-Peucker tolerance applied to the input polygons first
-        (topology preserving; polygons that collapse are dropped).
+        (topology preserving; polygons that collapse are dropped). Only the
+        configured buffers use the simplified outline.
     narrow_half_width, min_half_width : float, optional
         Adaptive-mode thresholds on the mean half-width (see `adaptive`).
     ring_fraction : float, optional
@@ -465,7 +473,17 @@ def bufferize_2d_polygons(
     Returns
     -------
     geopandas.GeoDataFrame, or (GeoDataFrame, pyvista.PolyData) if
-    `return_polydata` is True.
+    `return_polydata` is True. Besides x, y, z and `feature_cols`, every point
+    has:
+
+    - ``buffer_distance``: how far inside its polygon the point lies, positive,
+      in CRS units. Nominal for ``ring`` points (the buffer distance, e.g. 50,
+      100, 300 ...) and ``adaptive_ring`` points (``ring_fraction *
+      half-width``); measured to the unsimplified polygon's edge for
+      ``centreline`` and ``fallback_point`` points, whose distance varies.
+    - ``ring_index``: 1, 2, 3 ... for the configured buffers and their
+      extension, counted from the outline inward; missing (``<NA>``) for the
+      adaptive points.
     """
     if not hasattr(geopandas_2d_polygons, "geometry"):
         raise TypeError("geopandas_2d_polygons must be a GeoDataFrame with a geometry column.")
@@ -515,6 +533,8 @@ def bufferize_2d_polygons(
         feature_cols = list(feature_cols)
 
     gdf = geopandas_2d_polygons.copy()
+    gdf["_poly_id"] = np.arange(len(gdf))
+    original = np.asarray(gdf.geometry.values, dtype=object)  # before simplification
 
     missing_feature_cols = [c for c in feature_cols if c not in gdf.columns]
     if missing_feature_cols:
@@ -562,6 +582,7 @@ def bufferize_2d_polygons(
             break
 
         layer["_buffer_distance"] = buffer_distance
+        layer["_ring_index"] = step + 1
         buffered_layers.append(layer)
         step += 1
 
@@ -569,8 +590,10 @@ def bufferize_2d_polygons(
         layer["_source"] = "ring"
 
     if adaptive:
+        unsimplified = gdf.copy()
+        unsimplified["geometry"] = original[gdf["_poly_id"].to_numpy()]
         extra = _adaptive_layers(
-            gdf,
+            unsimplified,
             configured_buffers,
             narrow_half_width=narrow_half_width,
             min_half_width=min_half_width,
@@ -585,7 +608,7 @@ def bufferize_2d_polygons(
     zcol = level_col_or_z if isinstance(level_col_or_z, str) else "z"
 
     if not buffered_layers:
-        empty = gpd.GeoDataFrame(columns=["x", "y", zcol, *feature_cols, "geometry"])
+        empty = gpd.GeoDataFrame(columns=["x", "y", zcol, *feature_cols, "buffer_distance", "ring_index", "geometry"])
         empty = empty.set_geometry("geometry")
         empty.crs = gdf.crs
         if return_polydata:
@@ -630,6 +653,15 @@ def bufferize_2d_polygons(
 
     if adaptive:
         outdf["point_source"] = points_gdf["_source"].to_numpy()
+
+    distance = -pd.to_numeric(points_gdf["_buffer_distance"], errors="coerce").to_numpy(dtype=float)
+    measure = np.isnan(distance)  # centreline and fallback points: distance to the unsimplified edge
+    if measure.any():
+        pts = shapely.points(outdf["x"].to_numpy()[measure], outdf["y"].to_numpy()[measure])
+        polys = original[points_gdf["_poly_id"].to_numpy()[measure].astype(int)]
+        distance[measure] = shapely.distance(pts, shapely.boundary(polys))
+    outdf["buffer_distance"] = distance
+    outdf["ring_index"] = pd.array(pd.to_numeric(points_gdf["_ring_index"], errors="coerce").round(), dtype="Int64")
 
     z_numeric = pd.to_numeric(outdf[zcol], errors="coerce")
     geometry = gpd.points_from_xy(outdf["x"], outdf["y"], z=z_numeric)
